@@ -1,13 +1,16 @@
 #!/usr/bin/env python3
-"""Virtual MPC Sample: one launcher for macOS, Windows and Linux.
+"""Virtual MPC Gen 2 (MPC XL, MODEL=acvg for Live III) on stock firmware 3.10: one launcher
+for macOS, Windows and Linux.
 
     python3 lab.py build              # Docker: tools image, kernel, bridge, disk images
-    python3 lab.py run [--headless] [--accel tcg]
-    python3 lab.py panel              # virtual MPC Sample at http://127.0.0.1:8765/
+    python3 lab.py run [--headless] [--accel tcg]   # VM + panel page (http://127.0.0.1:8865/)
+    python3 lab.py panel              # the panel page alone
     python3 lab.py ssh [command...]   # root shell in the VM
-    python3 lab.py preload LIB.so | --off
+    python3 lab.py preload LIB.so | --off           # restart the app with LD_PRELOAD
     python3 lab.py autorun PACKAGE.zip [--no-reboot] [--yes] [--device-label] | --results
-    python3 lab.py stop | reset | status
+    python3 lab.py stop | reset | status            # stop = power key + SHUT DOWN, as on the device
+
+MODEL=acvc|acvg picks the product; MPCLAB_PORT_OFFSET=N moves every port by N (README-GEN2.md).
 
 Host requirements: Python 3.9+, QEMU 9+ (qemu-system-aarch64, qemu-img), OpenSSH, and
 Docker for `build`. No shell, make or dtc on the host: the device tree is patched here.
@@ -36,8 +39,18 @@ SD_SIZE = 512 << 20                             # QEMU's sd-card wants a power-o
 FW_DIR = os.environ.get("FW_DIR", os.path.join(LAB, "firmware"))   # extracted firmware, never committed
 CONTENT_DIR = os.environ.get("CONTENT_DIR", os.path.join(FW_DIR, "content"))   # factory library copy
 IMAGE = "mpclab-tools"
+# Gen 2 products this lab can pose as (device tree identity + screen size). MODEL=acvg for Live III.
+# Both panels are 800x1280 portrait, rotated in the device tree; the app draws 1280x800 landscape.
+# card: the FAT label of the lab's SD card (11 characters at most). The device keeps whatever
+# label a card already has (az0x-format-drive reuses it), so these are lab choices.
+MODELS = {"acvc": {"model": "Akai Professional MPC XL", "screen": (1280, 800), "card": "MPC XL"},
+          "acvg": {"model": "Akai Professional MPC Live III", "screen": (1280, 800), "card": "MPC LIVE3"}}
+MODEL = os.environ.get("MODEL", "acvc")
 HOST = "127.0.0.1"
-PORTS = {"cs": 5551, "ext_midi": 5552, "console": 5553, "qmp": 5554, "qmp_panel": 5555, "audio": 5556, "pcm": 5557, "vnc": 5910, "ssh": 2022, "usb_ssh": 2222, "panel": 8765}
+# Gen 2 lab: every port is the Sample lab's + 100, so both labs can run at once
+PORTS = {"cs": 5651, "ext_midi": 5652, "console": 5653, "qmp": 5654, "qmp_panel": 5655, "audio": 5656, "pcm": 5657, "vnc": 6010, "ssh": 2122, "usb_ssh": 2322, "panel": 8865}
+# a second copy of the lab (an agent's working copy) runs beside this one with MPCLAB_PORT_OFFSET=20 etc.
+PORTS = {k: v + int(os.environ.get("MPCLAB_PORT_OFFSET", "0")) for k, v in PORTS.items()}
 WIN = sys.platform == "win32"
 
 
@@ -81,8 +94,10 @@ def qmp(command, port=None, **arguments):
 
 def power_button():
     """Press the device's power button. QEMU's virt machine wires system_powerdown to a
-    gpio-keys KEY_POWER press; MPC Sample takes it like its own power key: it asks "Do you
-    want to shut down?", saves, shows "Shutting down" and powers the system off itself.
+    gpio-keys KEY_POWER press (/dev/input/by-path/platform-gpio-keys-event). The MPC app
+    reads that device itself and asks "Do you want to shut down your MPC XL?" (SHUT DOWN /
+    CANCEL); SHUT DOWN saves its settings and powers the system off (systemd poweroff).
+    The stock az01-pwrbtn daemon on the same device is only the emergency (held key) path.
     QEMU runs with -no-shutdown, so a powered-off guest stays in QEMU's "shutdown" state and
     the next press powers it on again (reset + continue), like the device."""
     if qmp("query-status")["return"]["status"] == "shutdown":
@@ -92,20 +107,23 @@ def power_button():
         qmp("system_powerdown")
 
 
-def yes_button():
-    """Press SCREEN 3 (the button above the screen under "Yes"). The panel server owns the
-    panel UART while it runs, so go through it; without it, write the MCU frames directly."""
-    try:
-        for action in ("press", "release"):
-            urllib.request.urlopen(urllib.request.Request(
-                f"http://{HOST}:{PORTS['panel']}/control", method="POST",
-                data=json.dumps({"name": "SCREEN 3", "action": action}).encode()), timeout=3)
-            time.sleep(0.1)
-    except OSError:
-        with socket.create_connection((HOST, PORTS["cs"]), timeout=3) as s:
-            s.sendall(bytes.fromhex("90 0E 7F"))                 # SCREEN 3 = note 14
-            time.sleep(0.1)
-            s.sendall(bytes.fromhex("80 0E 00"))
+# SHUT DOWN in the app's power dialog, in the 1280x800 screen (both XL and Live III draw it
+# there; seen on the XL, 3.10.0). The dialog opens on top of any other dialog, and with no
+# dialog up nothing else sits at that spot on the wizard or Select Project screens.
+SHUTDOWN_BUTTON = (532, 770)
+
+
+def touch(x, y, hold=0.08):
+    """One tap on the touchscreen (virtio-multitouch over QMP, as scripts/tap.py does)."""
+    w, h = MODELS[MODEL]["screen"]
+    tid = int(time.time()) % 60000 + 1
+
+    def mtt(kind, **kw):
+        return {"type": "mtt", "data": {"type": kind, "slot": 0, "tracking-id": tid, "axis": "x", "value": 0, **kw}}
+    qmp("input-send-event", events=[mtt("begin"), mtt("data", axis="x", value=x * 32767 // (w - 1)),
+                                    mtt("data", axis="y", value=y * 32767 // (h - 1))])
+    time.sleep(hold)
+    qmp("input-send-event", events=[mtt("end", **{"tracking-id": -1})])   # -1 lifts the finger
 
 
 def guest_off():
@@ -116,17 +134,20 @@ def guest_off():
 
 
 def shut_down(timeout=60):
-    """Power button, then Yes in the app's "Do you want to shut down?" (the button above the
-    screen under "Yes"), then wait until the guest has powered off."""
+    """As on the device: power key, SHUT DOWN in the app's dialog, wait for power-off.
+    A second round covers a press the app missed (still starting, or busy loading)."""
     if guest_off():
         return True
-    power_button()
-    time.sleep(2)                                                # the dialog appears
-    yes_button()
-    for _ in range(timeout * 2):
-        if guest_off():
-            return True
-        time.sleep(0.5)
+    end = time.time() + timeout
+    for attempt in range(2):
+        power_button()
+        time.sleep(2.5)                                          # the dialog appears
+        touch(*SHUTDOWN_BUTTON)
+        wait_until = end if attempt else min(end, time.time() + 25)
+        while time.time() < wait_until:
+            if guest_off():
+                return True
+            time.sleep(0.5)
     return False
 
 
@@ -146,7 +167,7 @@ def docker(*args, mounts=()):
 
 
 # ----------------------------------------------------------------------------- device tree
-# Minimal flattened-device-tree reader/writer: enough to add the AC50 properties and the
+# Minimal flattened-device-tree reader/writer: enough to add the inMusic properties and the
 # serial-midi nodes to QEMU's own virt DTB without dtc on the host.
 class Node:
     def __init__(self, name):
@@ -233,13 +254,13 @@ def s(*vals):
 
 
 def patch_dtb(blob):
-    """QEMU virt DTB + what MPC Sample reads from the device tree (see docs)."""
+    """QEMU virt DTB + what the MPC firmware reads from the device tree (model, product code)."""
     root, rsv = fdt_load(blob)
+    m = MODELS[MODEL]
     root.props.update({
-        "model": s("MPC Sample"),
-        "compatible": s("inmusic,ac50", "inmusic,az07", "rockchip,rk3566", "linux,dummy-virt"),
-        "inmusic,product-code": s("AC50"),
-        "inmusic,az07-pcb-rev": s("A"),
+        "model": s(m["model"]),
+        "compatible": s("inmusic," + MODEL, "inmusic,az04", "rockchip,rk3588", "linux,dummy-virt"),
+        "inmusic,product-code": s(MODEL.upper()),
         "serial-number": s("MPCLAB0000001"),
     })
     chosen = root.child("chosen")
@@ -260,11 +281,11 @@ def patch_dtb(blob):
 
 # ----------------------------------------------------------------------------- SD card
 def sdcard_image(qimg=None):
-    """sdcard/ -> FAT16 image labelled like the device's card ("MPC SAMPLE"), built by QEMU's vvfat.
+    """sdcard/ -> FAT16 image labelled MODELS[MODEL]["card"] (/media/MPC XL in the VM), built by QEMU's vvfat.
     shortcut: vvfat FAT16 holds at most ~500 MB; write a FAT32/exFAT builder when that is too small."""
     os.makedirs(SDCARD, exist_ok=True)
     os.makedirs(RUN, exist_ok=True)
-    spec = json.dumps({"driver": "vvfat", "dir": SDCARD, "fat-type": 16, "label": "MPC SAMPLE"})
+    spec = json.dumps({"driver": "vvfat", "dir": SDCARD, "fat-type": 16, "label": MODELS[MODEL]["card"]})
     tmp = SD_IMG + ".new"
     r = subprocess.run([qimg or tool("qemu-img"), "convert", "-q", "-O", "raw", "json:" + spec, tmp], capture_output=True, text=True)
     if r.returncode:
@@ -317,12 +338,15 @@ def cmd_run(a):
     # this halved the clicks for ~15 ms more pad latency. `--extra snd_aloop.min_buffer=0`
     # gives the device's buffer back (the later option wins). Kernel patch 0003.
     BUFFER = "snd_aloop.min_buffer=1024"
+    # two dummy UDCs: dummy_udc.0 for the app's own gadget, dummy_udc.1 for the virtual
+    # control surface (overlay mpclab-cs-gadget), each looped back to the VM's own USB host
+    UDCS = "dummy_hcd.num=2"
     # Stock command line from the signed FIT (extracted at build time), eMMC = first virtio disk.
     # tty1 stays empty under the boot splash: no cursor, no stock getty login prompt there
     # nohz=off: tickless idle made HVF wake idle vCPUs 15-30 ms late for every disk read
     # (cold project load 42-46 s -> 23 s); costs ~15% of one host core while idle.
     with open(os.path.join(OUT, "fw", "cmdline.txt")) as f:
-        args = f.read().strip().replace("/dev/mmcblk0p", "/dev/vda") + " console=hvc0 vt.global_cursor_default=0 systemd.mask=getty@tty1.service nohz=off " + BUFFER + " " + a.extra
+        args = f.read().strip().replace("/dev/mmcblk0p", "/dev/vda") + " console=hvc0 vt.global_cursor_default=0 systemd.mask=getty@tty1.service nohz=off " + BUFFER + " " + UDCS + " " + a.extra
 
     emmc = os.path.join(RUN, "emmc.qcow2")
     if not os.path.exists(emmc):
@@ -345,10 +369,14 @@ def cmd_run(a):
            "-drive", f"if=none,id=layer,file={qarg(os.path.join(OUT, 'lab-layer.ext4'))},format=raw,readonly=on",
            "-device", "virtio-blk-pci,drive=layer,serial=mpclab-layer",
            "-device", "sdhci-pci,id=sdhci", "-drive", "if=none,id=sdcard" + card, "-device", "sd-card,drive=sdcard,id=sd0",
-           "-device", "virtio-gpu-pci,xres=320,yres=240", "-device", "virtio-tablet-pci", "-device", "virtio-keyboard-pci",
-           "-chardev", tcp("cs", PORTS["cs"]), "-serial", "chardev:cs",
+           "-device", "virtio-gpu-pci,xres=%d,yres=%d" % MODELS[MODEL]["screen"], "-device", "virtio-multitouch-pci", "-device", "virtio-keyboard-pci",   # Gen 2 has a touchscreen
+           # Gen 2 has no panel UART: the first PL011 stays as a dead "Control Surface" card
+           # (only its index matters for the second one). PORTS["cs"] is the virtual USB control
+           # surface instead: the guest relay (mpclab-cs-relay) <-> panel/surface.py.
+           "-serial", "null",
            "-chardev", tcp("ext", PORTS["ext_midi"]), "-serial", "chardev:ext",
            "-device", "virtio-serial-pci",
+           "-chardev", tcp("cs", PORTS["cs"]), "-device", "virtserialport,chardev=cs,name=mpclab.cs",
            "-chardev", tcp("con", PORTS["console"], ",logfile=" + os.path.join(RUN, "console.log")), "-device", "virtconsole,chardev=con",
            "-chardev", tcp("audio", PORTS["audio"]), "-device", "virtserialport,chardev=audio,name=mpclab.audio",
            # host sound: the bridge streams PCM here and the panel page's audio worker plays it,
@@ -372,9 +400,9 @@ def cmd_run(a):
     # (the app asks it for the pot positions, MAIN VOLUME included, right at start).
     panel = None
     if not a.no_panel and not port_open(PORTS["panel"]):
-        panel = subprocess.Popen([sys.executable, os.path.join(LAB, "panel", "server.py")])
+        panel = subprocess.Popen([sys.executable, os.path.join(LAB, "panel", "gen2.py")])
         print(f"lab: panel at http://{HOST}:{PORTS['panel']}/")
-    print(f"lab: accel={accel} cpu={cpu}, sound plays in the panel page" + (" (software CPU emulation: expect it slower than the device)" if accel == "tcg" else ""))
+    print(f"lab: accel={accel} cpu={cpu}, sound: main out on the page (Sound button)" + (" (software CPU emulation: expect it slower than the device)" if accel == "tcg" else ""))
     with open(os.path.join(RUN, "cmdline.txt"), "w") as f:
         f.write(args + "\n")
     env = dict(os.environ)
@@ -395,10 +423,13 @@ def cmd_run(a):
                     proc.kill()
                     continue
                 cmd_run.pressed = True
-                print("\nlab: power button + Yes: MPC Sample saves and shuts down (Ctrl-C again to kill QEMU)")
+                print("\nlab: power key + SHUT DOWN: the MPC saves and powers off (Ctrl-C again to kill QEMU)")
                 try:
-                    if not shut_down():
-                        print("lab: no shutdown after 60 s (a question on the screen?), quitting QEMU")
+                    if shut_down():
+                        print("lab: the MPC powered off cleanly")
+                    else:
+                        print("lab: no power-off after 60 s (app not up, or a question on the screen?): quitting QEMU, "
+                              "the next boot will say the MPC was not properly shut down")
                     qmp("quit")
                 except OSError:
                     proc.kill()
@@ -430,10 +461,21 @@ def cmd_ssh(a):
     sys.exit(subprocess.call(["ssh", *ssh_base(), "root@" + HOST, *a.command]))
 
 
+# Gen 2: acvs.service runs /usr/bin/az01-launch-MPC, which execs /usr/bin/MPC (through setarch:
+# the rootfs has no systemd-inhibit), so the service environment reaches the app.
+APP_UNIT, APP_NAME = "acvs", "MPC"
+
+
 def cmd_preload(a):
-    dropin = "/run/systemd/system/ac50.service.d/mpclab-preload.conf"
-    if a.lib == "--off":
-        sys.exit(vm(f"rm -f {dropin} && systemctl daemon-reload && systemctl restart ac50 && systemctl is-active ac50"))
+    dropin = f"/run/systemd/system/{APP_UNIT}.service.d/mpclab-preload.conf"
+    if a.off:
+        sys.exit(vm(f"rm -f {dropin} && systemctl daemon-reload && systemctl restart {APP_UNIT} && sleep 10 && "
+                    f"systemctl is-active {APP_UNIT} && p=$(pidof {APP_NAME}) && "
+                    f"! grep -q /run/mpclab-preload/ /proc/$p/maps && echo 'stock {APP_NAME} running, no preload'"))
+    if not a.lib:
+        die("usage: lab.py preload LIB.so | --off")
+    if not os.path.isfile(a.lib):
+        die(f"{a.lib}: no such file")
     name = os.path.basename(a.lib)
     vm("mkdir -p /run/mpclab-preload /run/mpc-lab-ui-test " + os.path.dirname(dropin))
     base = ssh_base()
@@ -442,17 +484,22 @@ def cmd_preload(a):
     subprocess.run([*scp, a.lib, f"root@{HOST}:/run/mpclab-preload/{name}"], check=True)
     # /run is tmpfs: a reboot always returns to the stock service. /run/mpc-lab-ui-test is where
     # the mpc-lab libraries write overlay.log (their 'prepare' step creates it on the device).
+    # The restart stops the app with SIGTERM, not its power dialog; see README-GEN2.md.
     sys.exit(vm(f"printf '[Service]\\nEnvironment=LD_PRELOAD=/run/mpclab-preload/{name}\\n' > {dropin} && "
-                f"systemctl daemon-reload && systemctl restart ac50 && sleep 10 && systemctl is-active ac50 && "
-                f"p=$(pidof 'MPC Sample') && grep -q '{name}' /proc/$p/maps && echo 'mapped in MPC Sample' && "
+                f"systemctl daemon-reload && systemctl restart {APP_UNIT} && sleep 10 && systemctl is-active {APP_UNIT} && "
+                f"p=$(pidof {APP_NAME}) && grep -q '/run/mpclab-preload/{name}' /proc/$p/maps && "
+                f"echo \"mapped in {APP_NAME} (pid $p)\" && "
                 f"(tail -n 3 /run/mpc-lab-ui-test/overlay.log 2>/dev/null; true)"))
 
 
 def cmd_stop(a):
     if not port_open(PORTS["qmp"]):
         die("the VM is not running")
-    if not shut_down():                       # as on the device: power key, Yes, the app saves
-        print("lab: no shutdown after 60 s (a question on the screen?), quitting QEMU: unsaved changes are lost")
+    if shut_down():                           # as on the device: power key, SHUT DOWN, the app saves
+        print("lab: the MPC powered off cleanly")
+    else:
+        print("lab: no power-off after 60 s (app not up, or a question on the screen?): quitting QEMU; "
+              "unsaved changes are lost and the next boot says the MPC was not properly shut down")
     qmp("quit")
     wait_closed(PORTS["qmp"], 10)
     wait_closed(PORTS["panel"], 5)            # `run` closes its panel server after QEMU exits;
@@ -478,11 +525,11 @@ def cmd_status(a):
 # autorun/ folder goes on a fresh exFAT card, the MPC restarts without a card, the card goes in,
 # the app shows the script's question. The card is made inside the running VM by the
 # firmware's own fdisk and mkfs.exfat, in RAM on a loop device, so the app sees only the
-# finished card. Label without a space: some autorun loaders refuse /media/MPC SAMPLE.
+# finished card. Label without a space: some autorun loaders refuse a space in /media/<label>.
 AUTORUN_IMG = os.path.join(RUN, "autorun-card.img")
 AUTORUN_DIR = os.path.join(RUN, "autorun-pkg")
-AUTORUN_LABEL = "MPCSAMPLE"
-DEVICE_LABEL = "MPC SAMPLE"             # how the device formats a card: /media/MPC SAMPLE
+DEVICE_LABEL = MODELS[MODEL]["card"]                # the lab's normal card label: /media/MPC XL
+AUTORUN_LABEL = DEVICE_LABEL.replace(" ", "")       # MPCXL: no space in the mount path
 LITTER = ("__MACOSX", ".DS_Store")
 
 
@@ -516,9 +563,15 @@ def unpack_autorun(zip_path, dest=AUTORUN_DIR):
             if n != "autorun":
                 shutil.move(os.path.join(dest, n), inner)
     for root in [dest] + sorted(os.path.join(dest, d) for d in os.listdir(dest)):
-        if os.path.isfile(os.path.join(root, "autorun", "autorun.json")):
+        if os.path.isfile(os.path.join(root, "autorun", "autorun.json")) or package_files(root):
             return root
-    raise ValueError("no autorun/autorun.json in the zip")
+    raise ValueError("no autorun/autorun.json or autorun/*.scriptpkg in the zip")
+
+
+def package_files(card_root):
+    """Signed script packages on the card: what the Gen 2 app (3.10) looks for in autorun/."""
+    d = os.path.join(card_root, "autorun")
+    return sorted(n for n in os.listdir(d) if n.endswith(".scriptpkg")) if os.path.isdir(d) else []
 
 
 def guest(command, data=None, timeout=300):
@@ -603,6 +656,11 @@ def wait_app(timeout=240):
                        "(python3 lab.py autorun --results; out/run/console.log is the guest console)" % timeout)
 
 
+# what the app and its helpers log about card scripts: az01-signed-fs checks each
+# autorun/*.scriptpkg against /usr/lib/az0x/pubkeys (akai-1.pub) before anything runs
+RUNNER_LOG = "az01-signed-fs|scriptpkg|Script detected|About to run script|script-runner"
+
+
 def run_autorun(zip_path, reboot=True, confirm=False, log=print, label=AUTORUN_LABEL):
     if not re.fullmatch(r"[A-Za-z0-9_ -]{1,11}", label):   # goes into a shell line in the VM
         raise ValueError("card label: 1-11 letters, digits, space, _ or -")
@@ -613,13 +671,15 @@ def run_autorun(zip_path, reboot=True, confirm=False, log=print, label=AUTORUN_L
         wait_app()
     files = sum(len(fs) for _, _, fs in os.walk(root))
     log(f"package: {files} files, autorun/: {', '.join(sorted(os.listdir(os.path.join(root, 'autorun'))))}")
+    if not package_files(root):
+        log("warning: no autorun/*.scriptpkg. MPC 3.10 on Gen 2 lists autorun/ for *.scriptpkg only and never "
+            "reads autorun.json there (seen in the lab), so this card will not run anything")
     log("building an exFAT card with the firmware's fdisk/mkfs.exfat in the VM")
     size = make_autorun_card(root, label)
     log(f"card ready: {size >> 20} MiB, label {label}")
     if reboot:
-        # as on the device: power off, insert the card, power on; the stock runner starts
-        # the package at power-on (silently when its autorun.json says askQuestion: false)
-        log("power off (power key, Yes), insert the card, power on: clean RAM, the package runs at boot")
+        # as on the device: power off, insert the card, power on
+        log("power off (power key, SHUT DOWN), insert the card, power on")
         if not shut_down():
             # a running mod's sandbox can block poweroff; on the device one then holds POWER
             log("no clean shutdown in 60 s: hard power off, like holding POWER (unsaved work is lost)")
@@ -639,22 +699,24 @@ def run_autorun(zip_path, reboot=True, confirm=False, log=print, label=AUTORUN_L
         log(f"MPC is up with the card in: /media/{label}")
     else:
         card_swap(AUTORUN_IMG)
-        log(f"card inserted: /media/{label}; the app shows the script's question")
+        log(f"card inserted: /media/{label}")
     if confirm:
+        # unverified: no package has passed az01-signed-fs in the lab, so the question was never
+        # seen; this taps the left of the two bottom buttons, where SHUT DOWN / OK sit
         time.sleep(6)
-        press("SCREEN 1")
-        log("confirmed (left button above the screen)")
+        touch(*SHUTDOWN_BUTTON)
+        log("tapped the left bottom button (where the yes button of a two-button dialog sits; unverified)")
     time.sleep(5)                        # the runner logs within seconds of the mount
-    runner = [l for l in guest("journalctl -b --no-pager -o short-monotonic 2>/dev/null | grep -iE 'run script|script-runner|autorun'; true").decode(errors="replace").splitlines() if l.strip()]
-    log("script runner: " + ("\n".join(runner[-6:]) if runner else
-        "nothing logged; the runner did not pick the package up (it needs autorun/autorun.json, autorun.check and a card it can mount)"))
+    runner = [l for l in guest(f"journalctl -b --no-pager -o short-monotonic 2>/dev/null | grep -E '{RUNNER_LOG}'; true").decode(errors="replace").splitlines() if l.strip()]
+    log("autorun: " + ("\n".join(runner[-6:]) if runner else
+        "nothing logged: the app found no autorun/*.scriptpkg on the card (autorun.json alone is ignored on Gen 2)"))
 
 
 def autorun_results():
     """Script runner lines of this boot, the card's files and the tail of logs scripts leave."""
-    return guest("""journalctl -b --no-pager -o short-monotonic 2>/dev/null | grep -iE 'run script|script-runner|autorun' | tail -n 15
+    return guest(f"""journalctl -b --no-pager -o short-monotonic 2>/dev/null | grep -E '{RUNNER_LOG}' | tail -n 15
 for m in /media/*/; do [ -d "$m/autorun" ] || continue; echo; echo "== $m"; ls -la "$m" "$m/autorun" 2>&1; done
-for f in /media/*/autorun/*.txt /media/*/*.txt /run/*/events.txt /run/*/*.log; do [ -f "$f" ] && {{ echo; echo "== $f"; tail -n 25 "$f"; }; done; true""",
+for f in /media/*/autorun/*.txt /media/*/*.txt /run/*/events.txt /run/*/*.log; do [ -f "$f" ] && {{ echo; echo "== $f"; tail -n 25 "$f"; }}; done; true""",
                  timeout=60).decode(errors="replace")
 
 
@@ -669,7 +731,7 @@ def cmd_autorun(a):
 
 
 def cmd_panel(a):
-    sys.exit(subprocess.call([sys.executable, os.path.join(LAB, "panel", "server.py")]))
+    sys.exit(subprocess.call([sys.executable, os.path.join(LAB, "panel", "gen2.py")]))
 
 
 # ----------------------------------------------------------------------------- build (Docker)
@@ -724,7 +786,7 @@ def selftest():
     blob = patch_dtb(fdt_dump(root, b"\0" * 16))
     r2, rsv = fdt_load(blob)
     assert rsv == b"\0" * 16
-    assert r2.props["model"] == b"MPC Sample\0" and "stdout-path" not in r2.child("chosen").props
+    assert r2.props["model"] == MODELS[MODEL]["model"].encode() + b"\0" and "stdout-path" not in r2.child("chosen").props
     midi = r2.child("pl011@9040000").child("midi")
     assert midi.props["label"] == b"External MIDI\0" and struct.unpack(">I", midi.props["current-speed"])[0] == 31250
     assert fdt_dump(*fdt_load(blob)) == blob
@@ -740,20 +802,21 @@ def selftest():
             sdcard_image()
             with open(SD_IMG, "rb") as f:
                 img = f.read(64 * 512)
-            assert os.path.getsize(SD_IMG) == SD_SIZE and img[63 * 512 + 43:63 * 512 + 54] == b"MPC SAMPLE "
+            assert os.path.getsize(SD_IMG) == SD_SIZE and img[63 * 512 + 43:63 * 512 + 54] == MODELS[MODEL]["card"].ljust(11).encode()
     # autorun zips: autorun/ at the root, one folder down, or only its contents; no path escapes
     import tempfile
     import zipfile
     with tempfile.TemporaryDirectory() as d:
         for layout in ({"autorun/autorun.json": b"{}", "autorun/autorun.sh": b"x", "README.md": b"r"},
                        {"pkg/autorun/autorun.json": b"{}", "pkg/licenses/L": b"l", "__MACOSX/._x": b""},
-                       {"autorun.json": b"{}", "autorun.sh": b"x"}):
+                       {"autorun.json": b"{}", "autorun.sh": b"x"},
+                       {"autorun/signed.scriptpkg": b"x"}):
             zp = os.path.join(d, "p.zip")
             with zipfile.ZipFile(zp, "w") as z:
                 for n, data in layout.items():
                     z.writestr(n, data)
             root = unpack_autorun(zp, os.path.join(d, "out"))
-            assert os.path.isfile(os.path.join(root, "autorun", "autorun.json")), layout
+            assert os.path.isfile(os.path.join(root, "autorun", "autorun.json")) or package_files(root), layout
             assert not os.path.exists(os.path.join(d, "out", "__MACOSX"))
         with zipfile.ZipFile(zp, "w") as z:
             z.writestr("../evil", b"x")
@@ -776,7 +839,9 @@ def main():
     r.add_argument("--extra", default="", help="extra kernel arguments")
     r.add_argument("--no-panel", action="store_true", help="do not start the panel server")
     s_ = sub.add_parser("ssh"); s_.add_argument("command", nargs=argparse.REMAINDER)
-    p = sub.add_parser("preload"); p.add_argument("lib")
+    p = sub.add_parser("preload", help="restart the MPC app with LD_PRELOAD=LIB.so (until power-off); --off undoes it")
+    p.add_argument("lib", nargs="?")
+    p.add_argument("--off", action="store_true", help="restart the stock app without the library")
     ar = sub.add_parser("autorun", help="run an SD autorun package (zip) on the emulated MPC")
     ar.add_argument("zip", nargs="?")
     ar.add_argument("--no-reboot", action="store_true", help="insert the card without restarting the MPC first")

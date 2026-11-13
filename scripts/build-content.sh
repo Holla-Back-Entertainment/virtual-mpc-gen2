@@ -5,7 +5,7 @@
 #   out/emmc.base.qcow2 is rewritten in place. /data lives in the run overlay
 #   (out/run/emmc.qcow2), which never writes to the read-only /content, so it stays valid.
 # The factory library is not part of the firmware update; README.md says how to copy it
-# from your own MPC Sample.
+# from your own MPC (README-GEN2.md: not tried on Gen 2 yet).
 set -eu
 BASE=/lab/out/emmc.base.qcow2
 IMG=/tmp/emmc.raw

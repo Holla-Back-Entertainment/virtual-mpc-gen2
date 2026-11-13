@@ -1,7 +1,9 @@
 // mpclab-audio-bridge: the rear audio jacks of the virtual MPC Sample.
 //
-// MPC Sample plays into and records from snd-aloop (the lab's "platform-sound"), 4 ch
-// S32_LE 44.1 kHz in 128-frame periods. This bridge is the other end of both loopback pairs:
+// The app plays into and records from snd-aloop (the lab's "platform-sound"), S32_LE 44.1 kHz
+// in 128-frame periods: 4 ch on MPC Sample, 32 ch on Gen 2 (the app asks for 56, aloop's
+// maximum is 32; channels 0-1 are main out L/R, "Out 1,2" in the app).
+// This bridge is the other end of both loopback pairs:
 //   app playback hw:Loopback,0,0 -> reader thread (hw:Loopback,1,0 capture)  -> levels, host
 //   app capture  hw:Loopback,0,0 <- feeder thread (hw:Loopback,1,0 playback) <- source
 //
@@ -240,7 +242,8 @@ static void *host_in(void *arg) {
         struct pollfd p = { fd, POLLIN, 0 };
         if (poll(&p, 1, 1000) <= 0) continue;
         ssize_t k = read(fd, (char *)buf + have, sizeof buf - have);
-        if (k <= 0) { if (k < 0 && errno != EAGAIN) usleep(100000); continue; }
+        // 0: no page connected (POLLHUP never clears); sleep, or this thread spins a whole CPU
+        if (k <= 0) { if (k == 0 || errno != EAGAIN) usleep(100000); continue; }
         size_t bytes = have + (size_t)k, frames = bytes / 4;
         for (size_t i = 0; i < frames * 2; i++) lr[i] = buf[i] / 32768.0f;
         ring_push(&host_ring, lr, (unsigned)frames);

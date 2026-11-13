@@ -23,12 +23,9 @@ install -D -m 600 "$OUT/keys/host_ed25519" "$STAGE/etc/ssh/mpclab_host_ed25519_k
 install -D -m 600 "$OUT/keys/id_ed25519.pub" "$STAGE/root/.ssh/authorized_keys"
 mkdir -p "$STAGE/lab"
 install -D -m 755 "$OUT/bridge/mpclab-audio-bridge" "$STAGE/opt/mpclab/bin/mpclab-audio-bridge"
+install -D -m 755 "$OUT/bridge/mpclab-cs-relay" "$STAGE/opt/mpclab/bin/mpclab-cs-relay"
 chmod 700 "$STAGE/root/.ssh"
-# USB gadget: the stock scheme without its UAC2 function, which cannot bind on the lab's
-# dummy_hcd (no isochronous endpoints) and took the NCM network and USB MIDI down with it
-debugfs -R "dump /usr/lib/az0x-usb-gadget/ac50.scheme /tmp/ac50.scheme" /fw/rootfs.ext4 2>/dev/null
-install -d "$STAGE/usr/lib/az0x-usb-gadget"
-python3 /lab/scripts/gadget_scheme.py /tmp/ac50.scheme > "$STAGE/usr/lib/az0x-usb-gadget/ac50.scheme"
+# Gen 2: this rootfs ships no acvc/acvg gadget scheme, so there is nothing to adapt here.
 chown -R 0:0 "$STAGE"
 rm -f "$OUT/lab-layer.ext4"
 mke2fs -q -t ext4 -L mpclab -d "$STAGE" "$OUT/lab-layer.ext4" 64M
@@ -38,13 +35,14 @@ IR=/tmp/initramfs
 rm -rf "$IR"; mkdir -p "$IR/bin" "$IR/dev" "$IR/proc" "$IR/sys"
 cp /opt/arm64/bin/busybox "$IR/bin/busybox"   # arm64 busybox-static, also on amd64 hosts
 install -m 755 /lab/initramfs/init "$IR/init"
-# Boot splash: the stock image from the FIT's own initramfs (where the device's splash
-# daemon shows it), as raw pixels for /dev/fb0. Taken from the firmware, never committed.
+# Boot splash: the stock image from the FIT's own initramfs (where the device's az0x-splash
+# daemon shows it), as raw pixels for /dev/fb0 (1280x800 XRGB8888 here, as the app's screen).
+# mpc3.png is the MPC splash (force.png is Force's). Taken from the firmware, never committed.
 debugfs -R "dump /kernel.fit /tmp/kernel.fit" /fw/boot.ext2 2>/dev/null
 dumpimage -T flat_dt -p 1 -o /tmp/fit-initrd.zst /tmp/kernel.fit >/dev/null
 rm -rf /tmp/fit-initrd; mkdir /tmp/fit-initrd
-zstd -dc /tmp/fit-initrd.zst | (cd /tmp/fit-initrd && cpio -id --quiet usr/share/akai/splash/mpc-sample.png)
-python3 /lab/scripts/splash_raw.py /tmp/fit-initrd/usr/share/akai/splash/mpc-sample.png "$IR/splash.raw"
+zstd -dc /tmp/fit-initrd.zst | (cd /tmp/fit-initrd && cpio -id --quiet usr/share/akai/splash/mpc3.png)
+python3 /lab/scripts/splash_raw.py /tmp/fit-initrd/usr/share/akai/splash/mpc3.png "$IR/splash.raw"
 (cd "$IR" && find . | cpio -o -H newc --quiet | gzip -9) > "$OUT/initramfs.cpio.gz"
 
 # --- stock FIT (kernel cmdline with the dm-verity table is taken from it) -------
@@ -52,8 +50,20 @@ mkdir -p "$OUT/fw"
 debugfs -R "dump /kernel.fit $OUT/fw/kernel.fit" /fw/boot.ext2 2>/dev/null
 [ -s "$OUT/fw/kernel.fit" ]
 # the stock command line (dm-verity table + root hash) lives in the FIT's fdt-cmdline overlay
-dumpimage -T flat_dt -p 3 -o /tmp/fdt-cmdline.dtb "$OUT/fw/kernel.fit" >/dev/null
+# Gen 2 FIT: kernel, ramdisk, 5 device trees, then fdt-cmdline = image 7
+dumpimage -T flat_dt -p 7 -o /tmp/fdt-cmdline.dtb "$OUT/fw/kernel.fit" >/dev/null
 fdtget -t s /tmp/fdt-cmdline.dtb /fragment@0/__overlay__ bootargs > "$OUT/fw/cmdline.txt"
+# Gen 2 hands the verity table to its own initramfs init (after "--"). The lab has no stock
+# initramfs, so turn the same stock table and root hash into the kernel's dm-mod.create form.
+python3 - "$OUT/fw/cmdline.txt" <<'PY'
+import re, sys
+p = sys.argv[1]; c = open(p).read().strip()
+m = re.fullmatch(r'(.*?)\s+--\s+--table="(1 (\S+) \S+ (\d+) \d+ (\d+) .*)"', c)
+assert m, "unexpected Gen 2 command line: " + c
+base, table, dev, bs, blocks = m.group(1), m.group(2), m.group(3), int(m.group(4)), int(m.group(5))
+open(p, "w").write(f'root=/dev/dm-0 rootwait=5 {base} dm-mod.waitfor={dev} '
+                   f'dm-mod.create="rootfs,,,ro,0 {blocks * bs // 512} verity {table}"\n')
+PY
 grep -q 'verity' "$OUT/fw/cmdline.txt"
 
 # --- eMMC ---------------------------------------------------------------------

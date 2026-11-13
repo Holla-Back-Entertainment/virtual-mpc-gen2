@@ -12,3 +12,5 @@ file /lab/share/bin/strace
 # iolat: O_DIRECT read latency (lab diagnostics, tools/iolat.c)
 aarch64-linux-gnu-gcc -O2 -static -o /lab/share/bin/iolat /lab/tools/iolat.c
 aarch64-linux-gnu-gcc -O2 -static -o /lab/share/bin/wakelat /lab/tools/wakelat.c
+# preload-hello: test LD_PRELOAD library for `lab.py preload` (tools/preload-hello.c)
+aarch64-linux-gnu-gcc -O2 -Wall -shared -fPIC -o /lab/share/bin/libpreload-hello.so /lab/tools/preload-hello.c

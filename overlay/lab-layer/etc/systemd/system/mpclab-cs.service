@@ -1,0 +1,12 @@
+# Lab only: the virtual Gen 2 control surface, XL or Live III per the device tree (USB gadget + relay to panel/surface.py).
+[Unit]
+Description=MPC lab virtual control surface
+After=acvs.service
+
+[Service]
+ExecStart=/opt/mpclab/bin/mpclab-cs-gadget
+Restart=always
+RestartSec=2
+
+[Install]
+WantedBy=multi-user.target

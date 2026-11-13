@@ -5,3 +5,5 @@ set -eu
 mkdir -p /lab/out/bridge
 aarch64-linux-gnu-gcc -O2 -Wall -Wextra -o /lab/out/bridge/mpclab-audio-bridge /lab/bridge/mpclab-audio-bridge.c -lasound -lm
 file /lab/out/bridge/mpclab-audio-bridge
+aarch64-linux-gnu-gcc -O2 -Wall -Wextra -o /lab/out/bridge/mpclab-cs-relay /lab/bridge/mpclab-cs-relay.c -lasound
+file /lab/out/bridge/mpclab-cs-relay

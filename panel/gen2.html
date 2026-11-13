@@ -1,0 +1,449 @@
+<!doctype html>
+<html lang="en">
+<head>
+<meta charset="utf-8">
+<meta name="viewport" content="width=device-width, initial-scale=1">
+<title>Virtual __MODEL__</title>
+<style>
+  /* Laid out like the top panel of the device: screen between two black wings, a row of 16
+     Q-Links with step buttons, then the silver deck with strip, pads, keypad and transport. */
+  :root { color-scheme: dark; --black: #0b0b0d; --wing: #121214; --deck: #c9c9c6; --deck-line: #a9a9a5; --key: #17171a; --key-edge: #000; --ink: #d8d8dc; --dim: #8a8a93; --amber: #ffb347; --red: #e0283c; }
+  * { box-sizing: border-box; }
+  [hidden] { display: none !important; }
+  html, body { margin: 0; min-height: 100%; background: #060607; color: var(--ink); font: 14px/1.3 system-ui, sans-serif; }
+  body { display: flex; flex-direction: column; align-items: center; gap: 10px; padding: 12px; }
+  .unit { width: min(100%, 1180px); background: var(--black); border: 1px solid #26262b; border-radius: 14px; overflow: hidden; }
+  button { font: inherit; color: inherit; cursor: pointer; touch-action: none; user-select: none; -webkit-user-select: none; }
+  button:focus-visible, .strip:focus-visible { outline: 2px solid #fff; outline-offset: 1px; box-shadow: 0 0 0 4px #1a3fa0; position: relative; z-index: 2; }
+
+  .top { display: grid; grid-template-columns: minmax(0, 1fr) minmax(0, 1.9fr) minmax(0, 1fr); gap: 10px; padding: 10px; align-items: stretch; }
+  .wing { background: var(--wing); border: 1px solid #232327; border-radius: 8px; padding: 12px; display: flex; flex-direction: column; gap: 12px; }
+  .brand { font-size: 20px; font-weight: 300; letter-spacing: .12em; margin: 0; }
+  .brand small { display: block; font-size: 11px; letter-spacing: .2em; color: #ff6b7a; font-weight: 600; }
+  .bezel { background: #000; border: 1px solid #2a2a31; border-radius: 8px; padding: 8px; align-self: start; }
+  #screen { display: block; width: 100%; height: auto; aspect-ratio: __W__ / __H__; touch-action: none; user-select: none; -webkit-user-drag: none; cursor: pointer; background: #000; }
+  .util { display: flex; flex-wrap: wrap; gap: 6px; margin-top: auto; }
+  .util button { background: #1d1d22; border: 1px solid #34343c; border-radius: 6px; padding: 6px 10px; font-size: 12px; }
+  .util button[aria-pressed="true"] { border-color: var(--amber); color: var(--amber); }
+  #status, #link { font-size: 12px; color: #a6a6ae; }
+  #status.bad { color: #ff6b6b; }
+  .meter { display: flex; gap: 4px; align-items: flex-end; height: 54px; }
+  .meter i { width: 8px; background: #1e1e22; border-radius: 2px; height: 100%; position: relative; overflow: hidden; }
+  .meter i b { position: absolute; left: 0; right: 0; bottom: 0; background: linear-gradient(#ff5a4a, #ffd24a 25%, #57d98a 55%); height: 0; transition: height .08s; }
+
+  /* keys: black caps with a label and a thin light bar, as on the device */
+  .keys { display: grid; gap: 6px; }
+  .k { background: var(--key); border: 1px solid var(--key-edge); border-bottom-width: 3px; border-radius: 4px; padding: 6px 2px 8px; font-size: 11px; letter-spacing: .01em; overflow-wrap: anywhere; text-transform: uppercase; color: #e9e9ec; position: relative; min-height: 30px; line-height: 1.15; }
+  .k::after { content: ""; position: absolute; left: 22%; right: 22%; bottom: 2px; height: 2px; border-radius: 1px; background: #2c2c31; }
+  .k[data-led="1"]::after { background: #7a4a1a; }
+  .k[data-led="2"]::after, .k[data-led="3"]::after { background: var(--amber); box-shadow: 0 0 6px var(--amber); }
+  .k.hit, .k.held { transform: translateY(1px); border-bottom-width: 2px; background: #24242a; }
+  .k.held { outline: 1px solid #6aa7ff; }
+  .k.rec::after { background: #5a1420; } .k.rec[data-led="2"]::after, .k.rec[data-led="3"]::after { background: var(--red); box-shadow: 0 0 6px var(--red); }
+  .k.play[data-led="2"]::after, .k.play[data-led="3"]::after { background: #3ddc84; box-shadow: 0 0 6px #3ddc84; }
+
+  .qrow { background: #0e0e10; border-top: 1px solid #1d1d21; padding: 10px; display: grid; grid-template-columns: repeat(16, minmax(0, 1fr)); gap: 6px; }
+  .q { display: flex; flex-direction: column; align-items: center; gap: 6px; }
+  .knob { width: 100%; max-width: 46px; aspect-ratio: 1; border-radius: 50%; border: 2px solid #3a3a41; background: radial-gradient(circle at 35% 30%, #3a3a40, #121214 70%); padding: 0; position: relative; cursor: ns-resize; }
+  .knob::after { content: ""; position: absolute; left: 50%; top: 8%; width: 2px; height: 28%; background: #d8d8dc; transform-origin: 50% 150%; transform: translateX(-50%) rotate(var(--turn, 0deg)); }
+  .step { width: 100%; height: 12px; border-radius: 2px; border: 1px solid #000; background: #24242a; padding: 0; }
+  .step[data-led="1"] { background: #6a5a2a; } .step[data-led="2"], .step[data-led="3"] { background: var(--amber); box-shadow: 0 0 6px var(--amber); }
+  .step.hit { filter: brightness(1.6); }
+  .q span { font-size: 11px; color: #a6a6ae; }
+  /* the 128x32 display above each knob, drawn from what the app sends (GET /surface displays) */
+  canvas.oled { width: 100%; aspect-ratio: 4 / 1; background: #000; border: 1px solid #1d1d21; border-radius: 2px; image-rendering: pixelated; }
+  canvas.oled.stale { opacity: .5; }
+  .trackknob { display: grid; grid-template-columns: 52px minmax(0, 1fr); gap: 10px; align-items: center; }
+
+  .deck { background: var(--deck); color: #1a1a1c; padding: 12px; display: grid; grid-template-columns: minmax(0, 1.15fr) minmax(0, 1fr) minmax(0, 1.15fr); gap: 12px; align-items: start; }
+  .block { border: 1px solid var(--deck-line); border-radius: 6px; padding: 8px; display: flex; flex-direction: column; gap: 8px; }
+  .group { font-size: 11px; letter-spacing: .08em; text-transform: uppercase; color: #3a3a36; margin: 0; }
+  .left { display: grid; grid-template-columns: 34px minmax(0, 1fr); gap: 10px; }
+  .strip { background: #0c0c0e; border-radius: 4px; min-height: 220px; position: relative; cursor: ns-resize; touch-action: none; overflow: hidden; }
+  .strip::before { content: ""; position: absolute; left: 3px; right: 3px; bottom: var(--lo, 0%); height: var(--len, 0%); background: var(--amber); opacity: .55; border-radius: 2px; }
+  .strip::after { content: "strip"; position: absolute; inset: 0; display: grid; place-items: center; color: #a6a6ae; font-size: 11px; writing-mode: vertical-rl; }
+  .strip.hit { outline: 1px solid #6aa7ff; }
+  #pads { display: grid; grid-template-columns: repeat(4, 1fr); gap: 8px; background: #101012; padding: 10px; border-radius: 8px; border: 2px solid #050506; }
+  #pads button { aspect-ratio: 1; background: #1b1b1e; border: 3px solid var(--ring, #2c2c31); border-radius: 6px; padding: 4px; font-size: 11px; color: #a6a6ae; text-align: left; display: flex; align-items: flex-start; box-shadow: inset 0 0 14px #000; }
+  #pads button.hit { background: color-mix(in srgb, var(--ring, #555) 45%, #1b1b1e); }
+  .wheel { width: 84px; aspect-ratio: 1; border-radius: 50%; border: 3px solid #2a2a2e; background: radial-gradient(circle at 40% 35%, #f2f2f2, #8d8d92 60%, #4a4a4f); padding: 0; cursor: ns-resize; position: relative; justify-self: center; }
+  .wheel::after { content: ""; position: absolute; left: 50%; top: 10%; width: 8px; height: 8px; border-radius: 50%; background: #333; transform-origin: 50% 420%; transform: translateX(-50%) rotate(var(--turn, 0deg)); }
+  .cursor { display: grid; grid-template-columns: repeat(3, 28px); grid-template-rows: repeat(3, 28px); gap: 3px; justify-content: center; }
+  .cursor .k { min-height: 0; padding: 0; font-size: 12px; }
+  #help { margin: 0; line-height: 1.5; }
+  kbd { font: 11px/1 ui-monospace, monospace; background: #1d1d22; border: 1px solid #3a3a42; border-radius: 3px; padding: 1px 4px; color: var(--ink); }
+  .two { display: grid; grid-template-columns: minmax(0, 1fr) auto; gap: 10px; align-items: start; }
+  footer { font-size: 12px; color: #a6a6ae; max-width: 1180px; text-align: center; }
+  @media (max-width: 900px) {
+    .top, .deck { grid-template-columns: 1fr; }
+    .qrow { grid-template-columns: repeat(8, minmax(0, 1fr)); }
+  }
+</style>
+</head>
+<body>
+<div class="unit">
+  <div class="top">
+    <section class="wing" aria-label="Mixer keys">
+      <h1 class="brand"><small>VIRTUAL</small>__MODEL_SHORT__</h1>
+      <div class="trackknob" data-xl-only><button class="knob" id="trackknob" aria-label="Track level knob. Drag up or down." title="Track level: drag up or down"></button><canvas class="oled" width="128" height="32" data-display="16" aria-hidden="true"></canvas></div>
+      <div class="keys" style="grid-template-columns: repeat(2, 1fr)" data-keys="TRACKS:Tracks OUTPUTS:Outputs RETURNS:Returns SUBMIXES:Submixes TRACK_DEC:Trk − TRACK_INC:Trk +"></div>
+      <div class="keys" style="grid-template-columns: repeat(2, 1fr)" data-keys="RECORD_ARM:Rec arm TRACK_FX:Track FX MUTE:Mute SOLO:Solo QLINK:Q-Link USB_SELECT:USB select RECORD_TO_ARRANGE:Rec mode"></div>
+    </section>
+    <div class="bezel"><img id="screen" src="/screen.png" width="__W__" height="__H__" alt="MPC screen. Click or touch it like the device's touchscreen." draggable="false"></div>
+    <section class="wing" aria-label="Lab controls">
+      <p class="group" id="meterlabel" style="color: #a6a6ae" hidden>Main out</p>
+      <div class="meter" id="meter" aria-hidden="true" hidden><i><b></b></i><i><b></b></i></div>
+      <div id="link" role="status">control surface: waiting</div>
+      <div class="util">
+        <button id="sound" aria-pressed="false" title="Play the MPC's main out (1-2) on this computer">Sound off</button>
+        <button id="power" title="Press the device's power key">Power</button>
+        <span id="status" role="status">connecting</span>
+      </div>
+    </section>
+  </div>
+  <div class="qrow" id="qrow" aria-label="Q-Link knobs and step buttons"></div>
+  <div class="deck">
+    <section class="block left" aria-label="Left deck">
+      <div class="strip" id="strip" tabindex="0" role="slider" aria-label="Touch strip. Drag up or down." aria-valuemin="0" aria-valuemax="100" title="Touch strip: drag up or down (or arrow keys); the STRIP key picks its mode"></div>
+      <div style="display: flex; flex-direction: column; gap: 8px">
+        <p class="group">Step seq control</p>
+        <div class="keys" style="grid-template-columns: repeat(4, 1fr)" data-keys="SET:Set STEQ_SEQ_AUDITION:Audition STEP_PREV:Previous STEP_NEXT:Next"></div>
+        <p class="group">Pad bank</p>
+        <div class="keys" style="grid-template-columns: repeat(4, 1fr)" data-keys="PAD_BANK_A:A PAD_BANK_B:B PAD_BANK_C:C PAD_BANK_D:D SOUNDS:Sounds FAVOURITES:Favourites SAVE:Save BROWSER:Browse"></div>
+        <p class="group">Touch strip and sample</p>
+        <div class="keys" style="grid-template-columns: repeat(4, 1fr)" data-keys="TOUCHFX:Touch FX STRIP:Touch strip STEM:Stem CHOP:Chop MODE_SAMPLE_EDIT:Sample edit GRID:Grid edit TRACK_MUTE:Track mute PAD_MUTE:Pad mute ARRANGE:Arrange MATRIX:Matrix CHANNEL_MIXER:Mixer MODE_PROGRAM_EDIT:Track edit"></div>
+        <div class="keys" style="grid-template-columns: repeat(4, 1fr)" data-keys="FULL_LEVEL:Full level SIXTEEN_LEVEL:16 levels NEXT_SEQ:Next seq ERASE:Erase NOTE_REPEAT:Note repeat SHIFT:Shift"></div>
+        <div class="keys" style="grid-template-columns: repeat(4, 1fr)" data-keys="PAD_PERFORM:Pad perform SAMPLER:Sampler XYFX:XY FX"></div>
+      </div>
+    </section>
+    <section aria-label="Pads"><div id="pads"></div></section>
+    <section class="block" aria-label="Right deck">
+      <div class="two">
+        <div style="display: flex; flex-direction: column; gap: 8px">
+          <div class="keys" style="grid-template-columns: repeat(4, 1fr)" data-keys="TAP_TEMPO:Tap tempo COPY:Copy UNDO:Undo MENU:Menu"></div>
+          <div class="keys" style="grid-template-columns: repeat(4, 1fr)" data-keys="NUMERIC_1:1 NUMERIC_2:2 NUMERIC_3:3 MAIN:Main NUMERIC_4:4 NUMERIC_5:5 NUMERIC_6:6 SHIFT2:Shift NUMERIC_7:7 NUMERIC_8:8 NUMERIC_9:9 DATA_MINUS:− NUMERIC_PLUS_MINUS:+/− NUMERIC_0:0 NUMERIC_ENTER:Enter DATA_PLUS:+"></div>
+        </div>
+        <div style="display: grid; gap: 8px">
+          <button class="wheel" id="wheel" aria-label="Data wheel. Drag up or down, or use the mouse wheel or arrow keys."></button>
+          <div class="cursor">
+            <span></span><button class="k" data-key="CURSOR_UP" aria-label="Cursor up">▲</button><span></span>
+            <button class="k" data-key="CURSOR_LEFT" aria-label="Cursor left">◀</button><button class="k" data-key="CURSOR_CENTRE" aria-label="Cursor centre">●</button><button class="k" data-key="CURSOR_RIGHT" aria-label="Cursor right">▶</button>
+            <span></span><button class="k" data-key="CURSOR_DOWN" aria-label="Cursor down">▼</button><span></span>
+          </div>
+        </div>
+      </div>
+      <div class="keys" style="grid-template-columns: repeat(5, 1fr)" data-keys="METRONOME:Metro TC:TC on/off QUANTIZE:Quantize LOOP_ON:Loop on AUTOMATION:Auto"></div>
+      <p class="group">Locate</p>
+      <div class="keys" style="grid-template-columns: repeat(5, 1fr)" data-keys="PREV:&lt; NEXT:&gt; LOCATE:Locate BAR_PREV:≪ BAR_NEXT:≫"></div>
+      <div class="keys" style="grid-template-columns: repeat(5, 1fr)" data-keys="RECORD:● Rec|rec OVERDUB:⊕ Overdub|rec STOP:■ Stop PLAY:▶ Play|play PLAY_START:▶| Start|play"></div>
+    </section>
+  </div>
+</div>
+<footer><p id="help"><kbd>Space</kbd> play / stop &nbsp; Pads: <kbd>Z X C V</kbd> = 1-4, <kbd>A S D F</kbd> = 5-8, <kbd>Q W E R</kbd> = 9-12, <kbd>1 2 3 4</kbd> = 13-16 (pad 1 bottom left, velocity 100). On screen, hit a pad near its centre for hard, near its edge for soft, then drag on it for pressure. Drag a knob faster for bigger steps.</p>Stock firmware in a virtual machine. Works: touchscreen, main out sound, pads, buttons, data wheel, Q-Link knobs (a turn counts while the knob is touched; the server adds the touch for wheel and key turns), touch strip. Pad velocity and pressure follow where on the pad you hit. Not emulated: gain knobs.</footer>
+<script>
+const img = document.getElementById("screen"), status = document.getElementById("status");
+const W = __W__, H = __H__;
+let frame = "", down = false, lastMove = 0;
+
+function say(text, bad) { status.textContent = text; status.className = bad ? "bad" : ""; }
+
+// Control messages go out one at a time, in order (a Q-Link touch must land before its turns).
+// Lossy ones (pressure, strip moves) are dropped when the queue is backed up.
+let chain = Promise.resolve(), queued = 0;
+function ctl(body, lossy) {
+  if (lossy && queued > 2) return;
+  queued++;
+  chain = chain.then(() => post("/control", body)).finally(() => queued--);
+}
+async function post(path, body) {
+  try {
+    const r = await fetch(path, { method: "POST", body: JSON.stringify(body || {}) });
+    if (!r.ok) say(await r.text() || "lab not running", true);
+  } catch { say("panel server stopped", true); }
+}
+
+function at(e) {
+  const r = img.getBoundingClientRect();
+  return { x: Math.round((e.clientX - r.left) * W / r.width), y: Math.round((e.clientY - r.top) * H / r.height) };
+}
+
+img.addEventListener("pointerdown", e => { e.preventDefault(); img.setPointerCapture(e.pointerId); down = true; post("/touch", { type: "down", ...at(e) }); });
+img.addEventListener("pointermove", e => {
+  if (!down || performance.now() - lastMove < 16) return;      // one move per display frame
+  lastMove = performance.now(); post("/touch", { type: "move", ...at(e) });
+});
+for (const name of ["pointerup", "pointercancel"])
+  img.addEventListener(name, () => { if (down) { down = false; post("/touch", { type: "up" }); } });
+document.getElementById("power").addEventListener("click", () => post("/power"));
+
+async function poll() {
+  try {
+    const r = await fetch("/screen.png?v=" + frame);
+    if (r.status === 200) {
+      frame = r.headers.get("X-Frame");
+      const url = URL.createObjectURL(await r.blob()), old = img.src;
+      img.src = url; if (old.startsWith("blob:")) URL.revokeObjectURL(old);
+      say("live");
+    } else if (r.status === 304) say("live");
+    else say("lab not running", true);
+  } catch { say("panel server stopped", true); }
+  setTimeout(poll, down ? 50 : 100);
+}
+poll();
+
+// Control surface: everything below goes to POST /control (panel/surface.py plays the device's
+// USB panel); GET /surface gives back the pad colours, button LEDs and meters the app sets.
+const padsEl = document.getElementById("pads"), linkEl = document.getElementById("link"), qrow = document.getElementById("qrow");
+// Pad hit: where you hit sets velocity (centre = 127, edge = 20); while held, moving over the pad sends pressure the same way.
+const padHit = (btn, e) => {
+  const r = btn.getBoundingClientRect();
+  const dx = Math.abs(e.clientX - (r.left + r.width / 2)) / (r.width / 2), dy = Math.abs(e.clientY - (r.top + r.height / 2)) / (r.height / 2);
+  return Math.round(127 - Math.min(1, Math.max(dx, dy)) * 107);
+};
+function hold(btn, name, value, pad) {                  // press while held, release on lift
+  let lastP = -1;
+  const press = v => { btn.classList.add("hit"); ctl({ name, action: "press", value: v ?? value }); };
+  const up = () => { if (btn.classList.contains("hit")) { btn.classList.remove("hit"); lastP = -1; ctl({ name, action: "release" }); } };
+  btn.addEventListener("pointerdown", e => { e.preventDefault(); btn.setPointerCapture(e.pointerId); press(pad ? (lastP = padHit(btn, e)) : undefined); });
+  if (pad) btn.addEventListener("pointermove", e => {
+    if (!btn.classList.contains("hit") || e.buttons === 0 && e.pointerType === "mouse") return;
+    const v = padHit(btn, e);
+    if (Math.abs(v - lastP) >= 4) { lastP = v; ctl({ name, action: "pressure", value: v }, true); }
+  });
+  btn._hold = { press, up };
+  btn.addEventListener("pointerup", up); btn.addEventListener("pointercancel", up);
+  btn.addEventListener("keydown", e => { if ((e.key === " " || e.key === "Enter") && !e.repeat) press(); });
+  btn.addEventListener("keyup", e => { if (e.key === " " || e.key === "Enter") up(); });
+}
+function latch(btn, name) {                             // Shift latches: a mouse has one finger
+  btn.setAttribute("aria-pressed", "false");
+  btn.addEventListener("click", () => { const on = btn.classList.toggle("held"); btn.setAttribute("aria-pressed", on); ctl({ name, action: on ? "press" : "release" }); });
+}
+// Knobs and wheel: drag up/down, mouse wheel or arrow keys = clicks. Slow drag = 1 click per 3 px,
+// fast drag multiplies it (up to x8), so a flick sweeps a range and a nudge still registers.
+function turnable(el, name, touchName) {
+  let y = null, acc = 0, angle = 0, t0 = 0, sent = 0;
+  const turn = n => { if (!n) return; angle += n * 12; el.style.setProperty("--turn", angle + "deg"); ctl({ name, action: "turn", value: Math.max(-63, Math.min(63, n)) }); };
+  el.addEventListener("pointerdown", e => { e.preventDefault(); el.setPointerCapture(e.pointerId); y = e.clientY; acc = 0; t0 = performance.now(); if (touchName) ctl({ name: touchName, action: "press" }); });
+  el.addEventListener("pointermove", e => {
+    if (y === null) return;
+    const now = performance.now(), dy = y - e.clientY, speed = Math.abs(dy) / Math.max(1, now - t0);   // px per ms
+    y = e.clientY; t0 = now;
+    acc += dy * (1 + Math.min(7, speed * 2));                // fast drags count for more
+    const n = Math.trunc(acc / 3);
+    if (n) { acc -= n * 3; turn(n); }
+  });
+  const up = () => { if (y !== null) { y = null; if (touchName) ctl({ name: touchName, action: "release" }); } };
+  el.addEventListener("pointerup", up); el.addEventListener("pointercancel", up);
+  el.addEventListener("wheel", e => { e.preventDefault(); turn(e.deltaY < 0 ? 1 : -1); }, { passive: false });
+  el.addEventListener("keydown", e => { if (e.key === "ArrowUp" || e.key === "ArrowRight") turn(e.shiftKey ? 5 : 1); if (e.key === "ArrowDown" || e.key === "ArrowLeft") turn(e.shiftKey ? -5 : -1); });
+}
+const PAD_KEYS = {};                                          // key block: bottom row ZXCV = pads 1-4, then ASDF, QWER, 1234
+["zxcv", "asdf", "qwer", "1234"].forEach((row, r) => [...row].forEach((k, c) => { PAD_KEYS[k] = r * 4 + c + 1; }));
+for (const row of [3, 2, 1, 0]) for (let col = 0; col < 4; col++) {          // pad 1 is bottom left, as on the device
+  const n = row * 4 + col + 1, b = document.createElement("button");
+  b.textContent = String(n).padStart(2, "0"); b.dataset.pad = n - 1; b.setAttribute("aria-label", "Pad " + n);
+  b.title = "Pad " + n + ": hit near the centre for hard, near the edge for soft; drag while held for pressure. Key: " + Object.keys(PAD_KEYS).find(k => PAD_KEYS[k] === n).toUpperCase();
+  hold(b, "PAD " + n, 100, true); padsEl.append(b);
+}
+for (const box of document.querySelectorAll(".keys")) for (const item of box.dataset.keys.split(" ").reduce((a, w) => (w.includes(":") ? a.push(w) : a[a.length - 1] += " " + w, a), [])) {
+  const [name, rest] = item.split(":"), [label, cls] = rest.split("|"), b = document.createElement("button");
+  b.className = "k" + (cls ? " " + cls : ""); b.textContent = label; b.dataset.key = name; b.title = name.replaceAll("_", " ");
+  if (name.startsWith("SHIFT")) latch(b, name); else hold(b, name, 127);
+  box.append(b);
+}
+for (const b of document.querySelectorAll(".cursor .k")) hold(b, b.dataset.key, 127);
+for (let n = 1; n <= 16; n++) {
+  const q = document.createElement("div"), knob = document.createElement("button"), step = document.createElement("button"), tag = document.createElement("span"), oled = document.createElement("canvas");
+  oled.className = "oled"; oled.width = 128; oled.height = 32; oled.dataset.display = n - 1; oled.setAttribute("aria-hidden", "true"); q.append(oled);
+  q.className = "q"; knob.className = "knob"; knob.setAttribute("aria-label", "Q-Link " + n); knob.title = "Q-Link " + n + ": drag up or down; faster drag = bigger steps"; turnable(knob, "QLINK " + n, `QLINK${n}_TOUCH`);
+  step.className = "step"; step.dataset.key = "STEP" + n; step.setAttribute("aria-label", "Step " + n); hold(step, "STEP" + n, 127);
+  tag.textContent = n; q.append(knob, step, tag); qrow.append(q);
+}
+turnable(document.getElementById("wheel"), "DATA_WHEEL");
+const trackKnob = document.getElementById("trackknob");                      // the XL's 17th knob: current track level
+if (trackKnob) turnable(trackKnob, "QLINK 17");
+const drawn = {};
+function showDisplays(displays) {                       // rows: 32 strings of 32 hex digits, MSB = left pixel
+  for (const c of document.querySelectorAll("canvas.oled")) {
+    const d = displays[c.dataset.display];
+    if (!d || !d.rows) continue;
+    c.classList.toggle("stale", !!d.stale);
+    if (drawn[c.dataset.display] === d.updates) continue;
+    drawn[c.dataset.display] = d.updates;
+    const g = c.getContext("2d"), im = g.createImageData(128, 32);
+    d.rows.forEach((row, y) => { for (let x = 0; x < 128; x++) if (parseInt(row[x >> 2], 16) & (8 >> (x & 3))) { const i = (y * 128 + x) * 4; im.data[i] = im.data[i + 1] = im.data[i + 2] = 235; im.data[i + 3] = 255; } });
+    g.putImageData(im, 0, 0);
+  }
+}
+// Keyboard: space = play/stop, ZXCV/ASDF/QWER/1234 = pads 1-16 (velocity 100). Space/Enter stay with a focused button.
+let lastLeds = {};
+const heldKeys = new Map();
+const tap = name => { ctl({ name, action: "press" }); setTimeout(() => ctl({ name, action: "release" }), 60); };
+addEventListener("keydown", e => {
+  if (e.ctrlKey || e.metaKey || e.altKey || e.target.closest("input, textarea, select, [contenteditable]")) return;
+  if (e.key === " ") {
+    if (e.target.closest("button, [role=slider]")) return;     // a focused control keeps Space
+    e.preventDefault(); if (!e.repeat) tap((lastLeds.PLAY || 0) >= 2 ? "STOP" : "PLAY"); return;
+  }
+  const n = PAD_KEYS[e.key.toLowerCase()];
+  if (!n || e.repeat || heldKeys.has(e.code)) return;
+  const b = padsEl.querySelector(`[data-pad="${n - 1}"]`); heldKeys.set(e.code, b); b._hold.press(100);
+});
+addEventListener("keyup", e => { const b = heldKeys.get(e.code); if (b) { heldKeys.delete(e.code); b._hold.up(); } });
+addEventListener("blur", () => { for (const b of heldKeys.values()) b._hold.up(); heldKeys.clear(); });
+const strip = document.getElementById("strip");           // touch strip: bottom = 0, top = 1
+let stripDown = false, stripLast = 0;
+const stripAt = e => { const r = strip.getBoundingClientRect(); return Math.max(0, Math.min(1, (r.bottom - e.clientY) / r.height)); };
+strip.addEventListener("pointerdown", e => { e.preventDefault(); strip.setPointerCapture(e.pointerId); stripDown = true; strip.classList.add("hit"); ctl({ name: "TOUCH_STRIP", action: "press", value: stripAt(e) }); });
+strip.addEventListener("pointermove", e => {
+  if (!stripDown || performance.now() - stripLast < 16) return;
+  stripLast = performance.now(); ctl({ name: "TOUCH_STRIP", action: "move", value: stripAt(e) }, true);
+});
+for (const name of ["pointerup", "pointercancel"])
+  strip.addEventListener(name, () => { if (stripDown) { stripDown = false; strip.classList.remove("hit"); ctl({ name: "TOUCH_STRIP", action: "release" }); } });
+let stripKey = 0.5;
+strip.addEventListener("keydown", e => {
+  const d = e.key === "ArrowUp" || e.key === "ArrowRight" ? 0.05 : e.key === "ArrowDown" || e.key === "ArrowLeft" ? -0.05 : 0;
+  if (!d) return; e.preventDefault(); stripKey = Math.max(0, Math.min(1, stripKey + d));
+  ctl({ name: "TOUCH_STRIP", action: "press", value: stripKey }); ctl({ name: "TOUCH_STRIP", action: "release" });
+});
+function showStrip(leds) {                               // the app lights TOUCH_STRIP_1..25 (ch2)
+  const lit = [];
+  for (let i = 1; i <= 25; i++) if (leds["TOUCH_STRIP_" + i]) lit.push(i);
+  strip.style.setProperty("--lo", lit.length ? (lit[0] - 1) * 4 + "%" : "0%");
+  strip.style.setProperty("--len", lit.length ? (lit[lit.length - 1] - lit[0] + 1) * 4 + "%" : "0%");
+  strip.setAttribute("aria-valuenow", lit.length ? lit[lit.length - 1] * 4 : 0);
+}
+// Not an XL: the layout above is the XL's. Hide what the product's control table does not have
+// (keys by name, Q-Link columns past its count, step buttons without a STEPn entry).
+const MODEL_CONTROLS = __CONTROLS__;
+if (MODEL_CONTROLS) {
+  const known = new Set(MODEL_CONTROLS.buttons);
+  for (const b of document.querySelectorAll("[data-key]")) if (!known.has(b.dataset.key)) b.hidden = true;
+  [...qrow.children].forEach((q, i) => { if (i >= MODEL_CONTROLS.qlinks) q.querySelector(".knob").hidden = true; if (!known.has("STEP" + (i + 1))) q.querySelector(".step").hidden = true; if (i >= MODEL_CONTROLS.qlinks && !known.has("STEP" + (i + 1))) q.hidden = true; });
+  document.querySelector("footer").prepend(`${MODEL_CONTROLS.name} (${MODEL_CONTROLS.model}): XL layout with the keys this product does not have hidden. `);
+}
+const meterBars = document.querySelectorAll("#meter b"), meterEl = document.getElementById("meter"), meterLabel = document.getElementById("meterlabel");
+let meterSeen = false;   // measured on 3.10.0: VU_* and MAIN_OUTPUT_METER_* never leave 0 (metronome, pad hits, mixer screen)
+async function surface() {
+  try {
+    const r = await fetch("/surface");
+    if (r.ok) {
+      const s = await r.json(), leds = s.leds || {}; lastLeds = leds;
+      linkEl.textContent = (MODEL_CONTROLS ? MODEL_CONTROLS.name + " " : "") + "control surface: " + (s.active ? "connected" : "waiting for the app");
+      for (const b of padsEl.children) {
+        const c = ((s.lights || {}).pads || {})[+b.dataset.pad + 1] || (s.rgb || {})[b.dataset.pad];   // 7-bit colours
+        if (c && c.some(v => v)) b.style.setProperty("--ring", `rgb(${c.map(v => Math.min(255, v * 2)).join(",")})`); else b.style.removeProperty("--ring");
+      }
+      for (const b of document.querySelectorAll("[data-key]")) b.dataset.led = leds[b.dataset.key] || 0;
+      showStrip(leds);
+      showDisplays(s.displays || {});
+      const steps = (s.lights || {}).steps || {};
+      for (const b of document.querySelectorAll(".step")) {
+        const c = steps[b.dataset.key.slice(4)];
+        b.style.background = c && c.some(v => v) ? `rgb(${c.map(v => Math.min(255, v * 2)).join(",")})` : "";
+      }
+      const meters = (s.lights || {}).meters || {};      // segments 0..6 per meter
+      ["LEFT", "RIGHT"].forEach((side, i) => {
+        const m = meters["MAIN_OUTPUT_" + side] || meters["VU_" + side] || {}, v = m.segments || 0;
+        if (v) meterSeen = true;
+        meterBars[i].style.height = Math.min(100, v / 6 * 100) + "%";
+      });
+      if (meterSeen) meterEl.hidden = meterLabel.hidden = false;      // stays hidden until the app ever sends a level
+    } else linkEl.textContent = "control surface: not available";
+  } catch { linkEl.textContent = "control surface: not available"; }
+  setTimeout(surface, 200);
+}
+surface();
+// Sound: the same path as the Sample page (panel/index.html, "sound"). The bridge in the VM
+// streams main out L/R as S16 stereo 44.1 kHz to QEMU's WebSocket chardev "mpclab.pcm"; a
+// worker reads it and hands chunks to a worklet that plays them from a ring buffer, resampling
+// by up to 0.3% to hold ~7 ms queued (guest and sound-card clocks drift). Starts on a click
+// (browser autoplay rule); the button then suspends and resumes the context.
+const WORKLET = `
+class Player extends AudioWorkletProcessor {
+  constructor() {
+    super();
+    this.size = 65536; this.buf = new Float32Array(this.size * 2);
+    this.w = 0; this.r = 0; this.frac = 0; this.target = 320; this.ema = 320; this.primed = false; this.calm = 0;
+    const push = data => {
+      const s = new Int16Array(data), n = s.length >> 1;
+      for (let i = 0; i < n; i++, this.w++) {
+        const k = (this.w % this.size) * 2;
+        this.buf[k] = s[2 * i] / 32768; this.buf[k + 1] = s[2 * i + 1] / 32768;
+      }
+      if (this.w - this.r > this.size / 2) { this.r = this.w - this.target; this.frac = 0; }
+    };
+    this.port.onmessage = e => { if (e.data && e.data.port) e.data.port.onmessage = m => push(m.data); };
+  }
+  process(_, outputs) {
+    const L = outputs[0][0], R = outputs[0][1] || L, n = L.length, fill = this.w - this.r;
+    if (!this.primed) {
+      if (fill < this.target) { L.fill(0); R.fill(0); return true; }
+      this.primed = true; this.ema = fill;
+    }
+    if (fill > 4 * this.target) { this.r = this.w - this.target; this.ema = this.target; }
+    this.ema += 0.01 * (fill - this.ema);
+    const ratio = 1 + Math.max(-0.003, Math.min(0.003, 0.003 * (this.ema - this.target) / this.target));
+    if (++this.calm > 344 * 10 && this.target > 320) { this.target = Math.max(320, this.target - 32); this.calm = 0; }
+    for (let i = 0; i < n; i++) {
+      if (this.w - this.r < 2) {                 // underrun: silence, then rebuffer to a larger target
+        L.fill(0, i); R.fill(0, i);
+        this.primed = false; this.calm = 0; this.target = Math.min(1536, this.target + 128);
+        break;
+      }
+      const a = (this.r % this.size) * 2, b = ((this.r + 1) % this.size) * 2, t = this.frac;
+      L[i] = this.buf[a] + (this.buf[b] - this.buf[a]) * t;
+      R[i] = this.buf[a + 1] + (this.buf[b + 1] - this.buf[a + 1]) * t;
+      this.frac += ratio;
+      const step = Math.floor(this.frac);
+      this.r += step; this.frac -= step;
+    }
+    return true;
+  }
+}
+registerProcessor("mpclab-player", Player);
+`;
+const AUDIO_WORKER = `
+let out = null, rest = new Uint8Array(0);
+function connect(url) {
+  const ws = new WebSocket(url);   // QEMU's chardev for the bridge's "mpclab.pcm" port
+  ws.binaryType = "arraybuffer";
+  ws.onmessage = m => {
+    if (typeof m.data === "string") return;
+    let b = new Uint8Array(m.data);
+    if (rest.length) { const j = new Uint8Array(rest.length + b.length); j.set(rest); j.set(b, rest.length); b = j; }
+    const n = b.length - b.length % 4;                       // whole stereo S16 frames
+    rest = b.slice(n);
+    if (n) { const c = b.slice(0, n).buffer; out.postMessage(c, [c]); }
+  };
+  ws.onclose = () => setTimeout(() => connect(url), 1000);
+}
+onmessage = e => { out = e.data.port; connect(e.data.url); };
+`;
+const soundBtn = document.getElementById("sound");
+let actx = null;
+async function toggleSound() {
+  if (!actx) {
+    actx = new AudioContext({ sampleRate: 44100, latencyHint: 0 });
+    await actx.audioWorklet.addModule(URL.createObjectURL(new Blob([WORKLET], { type: "text/javascript" })));
+    const player = new AudioWorkletNode(actx, "mpclab-player", { numberOfInputs: 0, outputChannelCount: [2] });
+    player.connect(actx.destination);
+    const ch = new MessageChannel();
+    player.port.postMessage({ port: ch.port1 }, [ch.port1]);
+    const worker = new Worker(URL.createObjectURL(new Blob([AUDIO_WORKER], { type: "text/javascript" })));
+    worker.postMessage({ port: ch.port2, url: `ws://${location.hostname}:__PCM__` }, [ch.port2]);
+    actx.onstatechange = showSound;
+  } else if (actx.state === "running") await actx.suspend();
+  else await actx.resume();
+  showSound();
+}
+function showSound() {
+  const on = actx.state === "running";
+  soundBtn.textContent = on ? "Sound on" : "Sound off"; soundBtn.setAttribute("aria-pressed", on);
+}
+soundBtn.addEventListener("click", toggleSound);
+</script>
+</body>
+</html>

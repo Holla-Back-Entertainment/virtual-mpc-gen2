@@ -1,10 +1,10 @@
 #!/usr/bin/env python3
-"""PNG (grayscale or RGB, 1/8-bit, non-interlaced) -> raw XRGB8888 for /dev/fb0.
+"""PNG (grayscale, RGB or RGBA, 1/8-bit, non-interlaced) -> raw XRGB8888 for /dev/fb0.
 
     splash_raw.py IN.png OUT.raw
 
-Used at build time on the stock boot splash (/usr/share/akai/splash/mpc-sample.png in the
-FIT's initramfs, 320x240 1-bit): the lab initramfs writes it to the framebuffer at power-on,
+Used at build time on the stock boot splash (Gen 2: /usr/share/akai/splash/mpc3.png in the
+FIT's initramfs, 1280x800 RGBA, alpha composited over black): the lab initramfs writes it to the framebuffer at power-on,
 where the device's splash daemon shows the same image. The image is read from the firmware,
 never committed.
 """
@@ -24,8 +24,8 @@ def decode(data):
             w, h, depth, ctype, _, _, interlace = struct.unpack(">IIBBBBB", body)
         elif kind == b"IDAT":
             idat += body
-    assert interlace == 0 and ctype in (0, 2) and depth in (1, 8) and (ctype == 0 or depth == 8)
-    channels = 3 if ctype == 2 else 1
+    assert interlace == 0 and ctype in (0, 2, 6) and depth in (1, 8) and (ctype == 0 or depth == 8)
+    channels = {0: 1, 2: 3, 6: 4}[ctype]
     stride = (w * channels * depth + 7) // 8
     bpp = max(1, channels * depth // 8)
     raw = zlib.decompress(idat)
@@ -53,7 +53,10 @@ def decode(data):
     out = bytearray()
     for line in rows:
         for x in range(w):
-            if ctype == 2:
+            if ctype == 6:
+                r, g, b, a = line[x * 4:x * 4 + 4]
+                r, g, b = r * a // 255, g * a // 255, b * a // 255
+            elif ctype == 2:
                 r, g, b = line[x * 3:x * 3 + 3]
             elif depth == 1:
                 r = g = b = 255 if line[x >> 3] >> (7 - (x & 7)) & 1 else 0

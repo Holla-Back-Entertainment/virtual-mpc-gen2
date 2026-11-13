@@ -1,0 +1,50 @@
+#!/bin/sh
+# Lab only: plug the virtual Gen 2 control surface into the app: MPC XL (ACVC, 09e8:005a) or
+# MPC Live III (ACVG, 09e8:0058), whichever the device tree says this unit is.
+# A configfs f_midi gadget with 2 MIDI ports each way on the second dummy UDC
+# (kernel option dummy_hcd.num=2); dummy_hcd loops it back as a snd-usb-audio card whose
+# components read "USB09e8:005a" (or 0058), the name the app's AcvxDriverMidiPipe looks for.
+# Then exec the relay, which carries the gadget's MIDI to the host (panel/surface.py).
+set -eu
+# Which product: the device tree's product code (lab.py MODEL). ACVG = MPC Live III, 09e8:0058.
+CODE=$(tr -d '\0' < /sys/firmware/devicetree/base/inmusic,product-code 2>/dev/null || true)
+case "$CODE" in
+    ACVG) M=acvg PID=0x0058 NAME="MPC Live III" ;;
+    *)    M=acvc PID=0x005a NAME="MPC XL" ;;
+esac
+U=$(echo $M | tr a-z A-Z)
+G=/sys/kernel/config/usb_gadget/mpclab_$M
+UDC=dummy_udc.1
+[ -e /sys/class/udc/$UDC ] || { echo "no $UDC: boot with dummy_hcd.num=2" >&2; exit 1; }
+
+# The app's own gadget (configfs "standalone", 09e8:205a "MIDI Gadget") sits on dummy_udc.0,
+# whose host side is this same VM. Keep that cable unplugged: enumerated there it had no
+# driver and raised the stock "UNRECOGNIZED USB DEVICE" dialog. The gadget itself stays up.
+for p in /sys/devices/platform/dummy_hcd.0/usb*/*-0:1.0/usb*-port1/disable; do
+    [ -e "$p" ] && echo 1 > "$p"
+done
+
+# Wait for the app's gadget first: the app picks its forwarding card by the f_midi driver
+# name "MIDI Gadget", which this gadget's card shares, so ours must come second.
+i=0
+while [ "$(cat /sys/kernel/config/usb_gadget/standalone/UDC 2>/dev/null)" = "" ] && [ $i -lt 120 ]; do
+    sleep 0.5; i=$((i + 1))
+done
+
+if [ ! -d $G ]; then
+    mkdir $G
+    echo 0x09e8 > $G/idVendor
+    echo $PID > $G/idProduct
+    echo 0x0100 > $G/bcdDevice
+    mkdir $G/strings/0x409
+    echo "Akai Professional" > $G/strings/0x409/manufacturer
+    echo "$NAME" > $G/strings/0x409/product
+    echo "MPCLAB-$U-0001" > $G/strings/0x409/serialnumber
+    mkdir $G/configs/c.1 $G/functions/midi.$M
+    echo 2 > $G/functions/midi.$M/in_ports
+    echo 2 > $G/functions/midi.$M/out_ports
+    echo ${U}Surface > $G/functions/midi.$M/id
+    ln -s $G/functions/midi.$M $G/configs/c.1/
+fi
+[ "$(cat $G/UDC)" = "$UDC" ] || echo $UDC > $G/UDC
+exec /opt/mpclab/bin/mpclab-cs-relay ${U}Surface
