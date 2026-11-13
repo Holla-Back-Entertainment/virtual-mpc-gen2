@@ -31,9 +31,11 @@ ponytail: the page polls screendumps (~10 fps). Port the Sample panel's VNC push
 import hashlib
 import json
 import os
+import struct
 import sys
 import threading
 import time
+import zlib
 from http.server import BaseHTTPRequestHandler, ThreadingHTTPServer
 
 sys.path.insert(0, os.path.join(os.path.dirname(os.path.abspath(__file__)), ".."))
@@ -41,7 +43,7 @@ from lab import HOST, MODEL, MODELS, PORTS, RUN, qmp  # noqa: E402
 import surface  # noqa: E402
 
 W, H = MODELS[MODEL]["screen"]
-PNG = os.path.join(RUN, "gen2-screen.png")
+PPM = os.path.join(RUN, "gen2-screen.ppm")
 LOCK = threading.Lock()          # one QMP exchange at a time on the panel's own QMP port
 tid = 0                          # contact id of the finger that is down
 SURFACE = None                   # surface.Surface, started in __main__
@@ -188,10 +190,18 @@ AUDIO = None                     # Audio, started in __main__
 
 
 def screen():
+    """PPM screendump (~1 ms in QEMU's main loop) encoded to PNG here. A PNG screendump took
+    45-85 ms under QEMU's lock at ~10 fps, which stalled the vCPUs: app audio xruns, clicks."""
     os.makedirs(RUN, exist_ok=True)
-    call("screendump", filename=PNG, format="png")
-    with open(PNG, "rb") as f:
-        return f.read()
+    call("screendump", filename=PPM, format="ppm")
+    with open(PPM, "rb") as f:
+        _, w, h, _, rgb = f.read().split(maxsplit=4)
+    w, h = int(w), int(h)
+    row = w * 3
+    raw = b"".join(b"\0" + rgb[y * row:(y + 1) * row] for y in range(h))
+    chunk = lambda t, d: struct.pack(">I", len(d)) + t + d + struct.pack(">I", zlib.crc32(t + d) & 0xFFFFFFFF)
+    return (b"\x89PNG\r\n\x1a\n" + chunk(b"IHDR", struct.pack(">IIBBBBB", w, h, 8, 2, 0, 0, 0))
+            + chunk(b"IDAT", zlib.compress(raw, 1)) + chunk(b"IEND", b""))
 
 
 class Handler(BaseHTTPRequestHandler):

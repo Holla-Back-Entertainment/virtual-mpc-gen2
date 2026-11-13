@@ -182,7 +182,11 @@ user-interactive QoS, locking guest RAM against macOS memory compression, bigger
 
 `lab.py run` gives the app a 23 ms buffer (`snd_aloop.min_buffer=1024`, patch 0003): about
 half the clicks in an A/B (11 -> 6 per minute), for ~15 ms more pad-to-sound latency, and in
-use the clicks were nearly gone. `python3 lab.py run --extra snd_aloop.min_buffer=0` gives
+use the clicks were nearly gone.
+Since 14 Nov 2026 the default is 46 ms (`min_buffer=2048`). The Gen 2 page's screen grab also
+moved from a PNG screendump (45-85 ms under QEMU's lock, ~10 fps, worst guest wake-up 57 ms) to
+PPM + PNG encoded in `panel/gen2.py`: app xruns with the screen polled went from 96 to 16 a
+minute, worst wake-up 3 ms. `python3 lab.py run --extra snd_aloop.min_buffer=0` gives
 back the device's 8.7 ms buffer.
 
 Diagnostics: `CONFIG_FTRACE` is on (sched, timer, irq and `snd_pcm` xrun/hwptr events in

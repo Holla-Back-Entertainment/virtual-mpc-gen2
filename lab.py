@@ -518,11 +518,11 @@ def cmd_run(a):
     with open(raw, "rb") as f, open(dtb, "wb") as g:
         g.write(patch_dtb(f.read()))
 
-    # The app's audio buffer: 1024 frames (23 ms) instead of the device's 384 (8.7 ms). macOS
+    # The app's audio buffer: 2048 frames (46 ms) instead of the device's 384 (8.7 ms). macOS
     # sometimes holds a vCPU for 10-30 ms, which the device's buffer cannot ride out (clicks);
     # this halved the clicks for ~15 ms more pad latency. `--extra snd_aloop.min_buffer=0`
     # gives the device's buffer back (the later option wins). Kernel patch 0003.
-    BUFFER = "snd_aloop.min_buffer=1024"
+    BUFFER = "snd_aloop.min_buffer=2048"
     # two dummy UDCs: dummy_udc.0 for the app's own gadget, dummy_udc.1 for the virtual
     # control surface (overlay mpclab-cs-gadget), each looped back to the VM's own USB host
     UDCS = "dummy_hcd.num=2"
