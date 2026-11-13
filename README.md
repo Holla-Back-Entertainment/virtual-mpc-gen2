@@ -102,7 +102,7 @@ DJ, producer, builder. Melbourne.
 - YouTube: [youtube.com/@henryskillz](https://youtube.com/@henryskillz)
 - TikTok: [@henryskillzau](https://tiktok.com/@henryskillzau)
 - Site: [henryskillz.com](https://henryskillz.com)
-- MPC Sample mods: [henryskillz-mpc-sample-mod-kit](https://github.com/hmukhwana/henryskillz-mpc-sample-mod-kit)
+- MPC Sample mods: [henryskillz-mpc-sample-mod-kit](https://github.com/Holla-Back-Entertainment/henryskillz-mpc-sample-mod-kit)
 
 ## License
 
