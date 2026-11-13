@@ -10,7 +10,8 @@ Time needed: 10 to 15 minutes. Nothing gets installed or changed on your unit.
 3. Start a new empty project with one drum track. Do not load samples.
 4. Take one straight top-down photo of the whole unit in good light.
 5. Shifted functions are the red print. Hold Shift and press the key. Release both between steps.
-6. If a step does nothing, that is a useful answer. Write "nothing".
+6. Save anything you care about first. Steps 12 and 13 might freeze the panel and need a restart.
+7. If a step does nothing, that is a useful answer. Write "nothing".
 
 ## Steps
 

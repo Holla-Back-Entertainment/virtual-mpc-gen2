@@ -21,7 +21,7 @@ Time needed: 10 to 15 minutes. Nothing gets installed or changed on your unit.
 | 3 | Press Audition | Screen or light change? Any sound? |
 | 4 | Press Step 1 on the main screen, then Step 16 | Screen change? Which lights come on? |
 | 5 | Press Save | Dialog? What does it say? Press Main to leave |
-| 6 | Press Arrange / Clip (under Loop On) | What shows, and what is the key called on the print? |
+| 6 | Press Arrange (the one under Loop On, right side) | What shows? |
 | 7 | Press Play, then hold Erase | Does the Erase light or screen change? Press Stop |
 | 8 | Press Note Repeat, then hit a pad | Light, screen, repeating hits? Press it again to turn off |
 | 9 | Tap Tempo four times | Does the tempo change on screen? |
@@ -44,8 +44,8 @@ Time needed: 10 to 15 minutes. Nothing gets installed or changed on your unit.
 | 26 | Shift + Pad Mute | What opens? (XY FX?) |
 | 27 | Shift + Menu | What opens? |
 | 28 | Shift + Loop On | What happens? |
-| 29 | Turn the 17th Q-Link knob (next to the left wing) | What moves on screen? Which value? |
-| 30 | Look at the unit with nothing pressed, then press Shift. Any lights with no label? | Where are they and what colour? Do they change when you press things? |
+| 29 | Turn the knob on the left panel, above Tracks / Outputs | What moves on screen? Which value? |
+| 30 | Look for any light with no label next to it | Where is it, what colour, when does it change? |
 
 ## How to send results
 
