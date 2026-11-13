@@ -1,0 +1,7 @@
+# Lab only. /etc/fw_env.config (fw_printenv / fw_setenv, and libubootenv inside /usr/bin/MPC)
+# names the U-Boot environment as /dev/mmcblk0p3 (primary) and /dev/mmcblk0p4 (redundant).
+# The virtual eMMC is a virtio disk (vda), so give its env1 / env2 partitions those names.
+# The partitions stay blank (no U-Boot here): fw_printenv says "Cannot read environment,
+# using default" until something writes a valid environment.
+SUBSYSTEM=="block", ENV{ID_SERIAL}=="mpclab-emmc", ENV{PARTNAME}=="env1", SYMLINK+="mmcblk0p3"
+SUBSYSTEM=="block", ENV{ID_SERIAL}=="mpclab-emmc", ENV{PARTNAME}=="env2", SYMLINK+="mmcblk0p4"

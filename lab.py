@@ -334,6 +334,8 @@ def wait_closed(port, seconds):
 
 def docker(*args, mounts=()):
     cmd = ["docker", "run", "--rm", "-v", "mpclab-build:/build", "-v", f"{LAB}:/lab"]
+    if os.environ.get("REBUILD_EMMC"):          # build-images.sh reads it inside the container
+        cmd += ["-e", "REBUILD_EMMC=" + os.environ["REBUILD_EMMC"]]
     for src, dst in mounts:
         cmd += ["-v", f"{src}:{dst}:ro"]
     subprocess.run(cmd + [IMAGE, *args], check=True)
@@ -538,6 +540,10 @@ def cmd_run(a):
         args = f.read().strip().replace("/dev/mmcblk0p", "/dev/vda") + " console=hvc0 vt.global_cursor_default=0 systemd.mask=getty@tty1.service nohz=off " + BUFFER + " " + UDCS + " " + a.extra
 
     emmc = os.path.join(RUN, "emmc.qcow2")
+    base = os.path.join(OUT, "emmc.base.qcow2")
+    if os.path.exists(emmc) and os.path.getmtime(emmc) < os.path.getmtime(base):
+        os.remove(emmc)                   # an overlay on a rebuilt base reads garbage: start fresh
+        print("lab: eMMC base was rebuilt; starting this model's eMMC fresh (settings reset)")
     if not os.path.exists(emmc):
         subprocess.run([qimg, "create", "-q", "-f", "qcow2", "-F", "qcow2", "-b", os.path.join(OUT, "emmc.base.qcow2"), emmc], check=True)
     if not os.path.exists(NVME_IMG):

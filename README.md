@@ -1,6 +1,6 @@
 # Virtual MPC XL + MPC Live III
 
-The stock Akai MPC Gen 2 firmware (3.10.0) running unmodified in a virtual machine on your
+The stock Akai MPC Gen 2 firmware (3.10.1) running unmodified in a virtual machine on your
 computer. Pick an MPC XL or an MPC Live III. The whole unit opens in your browser: live
 touchscreen, pads, knobs, buttons, touch strip and sound.
 
@@ -49,12 +49,12 @@ You need:
 - A Mac with Apple Silicon. That is what this was built and tested on. Linux and Windows
   may work (the Sample lab it grew from runs there) but are untested here.
 - Python 3.9+, QEMU 9+ (`qemu-system-aarch64`, `qemu-img`), OpenSSH, Docker (build step only).
-- The MPC Gen 2 3.10.0 update image. Get it through the inMusic Software Center or your own
+- The MPC Gen 2 3.10.1 update image. Get it through the inMusic Software Center or your own
   unit's online update. It is one image for the XL, Live III, One, Key 37 and Force Gen 2.
 
 ```bash
 git clone https://github.com/Holla-Back-Entertainment/virtual-mpc-gen2.git && cd virtual-mpc-gen2
-python3 tools/extract_update.py /path/to/MPC-3.10.0-Gen2-update.img   # checked against inputs.sha256
+python3 tools/extract_update.py /path/to/MPC-3.10.1-Gen2-update.img   # checked against inputs.sha256
 python3 lab.py build                                                   # once, in Docker
 ```
 

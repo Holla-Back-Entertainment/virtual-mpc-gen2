@@ -1,6 +1,6 @@
 # Virtual MPC Gen 2 (MPC XL / MPC Live III)
 
-A QEMU lab that boots the stock Akai MPC Gen 2 firmware 3.10.0 (rootfs verified block by
+A QEMU lab that boots the stock Akai MPC Gen 2 firmware 3.10.1 (rootfs verified block by
 block with its own dm-verity table) on a virtual arm64 machine, posing as an MPC XL
 (`MODEL=acvc`, default) or an MPC Live III (`MODEL=acvg`). It is a fork of the MPC Sample
 lab (`README-SAMPLE.md` describes that one; most of `docs/` is still about the Sample). Use it to
@@ -260,15 +260,35 @@ on Rear In 1 only 5761 plays, on Rear In 2 only 5762. A MIDI track with MIDI OUT
 sent 5 of 5 note-ons to 5763 and 0 to 5764; with Out B, 0 and 5. The Mac app makes no Live III
 ports yet.
 
+## Developer Mode (3.10.1, verified on the XL and the Live III, 14 Nov 2026)
+
+The lab boots 3.10.1. Its Enhancements work in the lab exactly as Akai ships them. Not yet
+confirmed on a real XL or Live III.
+
+- **Turn it on:** Preferences > Enhancements (Beta) > Enable Enhancements, then Developer
+  Panel. The page also lists External Plugin Support, Mouse Pointer, Screenshots, Unlimited
+  Audio/Plugin Tracks, Unlimited Plugin Instances, Advanced Audio Settings and Remote Screen.
+  There is no "Load Untrusted OS" item on Gen 2.
+- **Open it:** the DEVELOPER icon on page 2 of the MENU grid. SHIFT+MENU opens Preferences,
+  not the panel. Tabs: SHELL (root terminal), SYSTEM (dmesg, journalctl, services), RESOURCES.
+- **SSH:** ticking Developer Panel starts sshd with root login and no key or password
+  (`/usr/lib/az0x/user-access/enable.sh`). Through the lab: `ssh -p 2142 root@127.0.0.1`
+  (XL) or `-p 2152` (Live III), plus your port offset. Unticking stops sshd and leaves
+  `/data/ssh`. It also takes `lab.py ssh` down; use `scripts/con.py` then.
+- **autorun.sh:** a drive with `autorun.sh` at its root asks "contains an autorun script. Do
+  you want to run it now?". YES runs it as root through `systemd-run` (unit `autorun-sh`),
+  with `AZ0X_SCRIPT_SRCDIR` set to the drive.
+- **Boot settings:** none of this wrote an `imb-*-used` flag. In the lab the env partitions
+  are blank (no U-Boot). `61-mpclab-ubootenv.rules` names them `/dev/mmcblk0p3`/`p4` so
+  `fw_printenv` works.
+- On a real unit, lock SSH before using it on any shared network: put a key in
+  `/data/ssh/authorized_keys` and empty `/data/ssh/sshd_config.d/allow-access.conf`.
+
 ## What does not work
 
-- **SD autorun.** MPC 3.10 on Gen 2 lists `autorun/` on a card for `*.scriptpkg` files only
-  and checks each with `az01-signed-fs` against `/usr/lib/az0x/pubkeys/akai-1.pub`. A plain
-  `autorun/autorun.json` + `autorun.sh` (+ `autorun.check`) package, as used on the Sample,
-  is never read; an unsigned `.scriptpkg` is rejected ("invalid image file: bad header").
-  `lab.py autorun` still builds and inserts the card and reports what the app logged, but
-  only an inMusic-signed package would run. `--yes` taps the left bottom button: unverified,
-  since no script question has been seen.
+- **Signed autorun packages.** `autorun/*.scriptpkg` on a card still needs inMusic's
+  signature (`az01-signed-fs`, `/usr/lib/az0x/pubkeys/akai-1.pub`). A plain `autorun.sh` does
+  run on 3.10.1, but only with Developer Panel on (see Developer Mode above).
 - **Factory content and plugins.** Only what the update image carries is installed (see
   above). A new project still reports "1 plug-in(s) failed to load: AIR Reverb Pro", and the
   app says new plugin instruments need their content files; nothing named Reverb Pro exists in

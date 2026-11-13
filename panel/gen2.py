@@ -139,8 +139,15 @@ class Audio:
         for ln in lines:
             lv = parse_levels(ln.decode(errors="replace"))
             if lv:
+                now = time.time()
                 with self.lock:
-                    self.lv, self.lv_time = lv, time.time()
+                    # QEMU accepts this socket before the guest's bridge opens its port, so a
+                    # routing line sent at boot is lost and the bridge starts in stereo. Re-send
+                    # whenever the bridge comes (back) alive: first levels, or after a 2 s gap.
+                    fresh = self.lv_time is None or now - self.lv_time > 2
+                    self.lv, self.lv_time = lv, now
+                if fresh:
+                    self.send()
 
     def set(self, body):
         with self.lock:
@@ -304,6 +311,13 @@ def selftest():
         raise AssertionError("bad source accepted")
     except ValueError:
         pass
+    class Sock:                                   # a bridge that comes up after the boot-time send
+        sent = []
+        def sendall(self, b): self.sent.append(b)
+    a.set({"width": 32, "in_width": 28}); a.sock = Sock()
+    a.feed(b"levels out 0 0 in 0 0 drop 0 under 0\n")          # bridge alive: routing re-sent
+    a.feed(b"levels out 0 0 in 0 0 drop 0 under 0\n")          # steady: not re-sent
+    assert len(Sock.sent) == 1 and Sock.sent[0].endswith(b" width=32 in_width=28\n"), Sock.sent
     print("gen2 panel selftest ok")
     surface.selftest()
 
