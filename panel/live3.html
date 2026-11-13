@@ -372,8 +372,11 @@ surface();
 // Sound: the same path as the Sample page (panel/index.html, "sound"). The bridge in the VM
 // streams main out L/R as S16 stereo 44.1 kHz to QEMU's WebSocket chardev "mpclab.pcm"; a
 // worker reads it and hands chunks to a worklet that plays them from a ring buffer, resampling
-// by up to 0.3% to hold ~7 ms queued (guest and sound-card clocks drift). Starts on a click
-// (browser autoplay rule); the button then suspends and resumes the context.
+// by up to 0.3% to hold ~7 ms queued (guest and sound-card clocks drift). Each underrun raises
+// that to at most 93 ms; it creeps back after 10 s without one. Gaps and skips are declicked:
+// the last sample decays through a gap and the next sound cross-fades in from it, so a stall
+// is a dip, not a step. Underrun/skip counts: the Sound button's tooltip, or audioStats in the
+// console. Starts on a click (browser autoplay rule); the button then suspends and resumes the context.
 // The "In" button next to it picks what the app hears on inputs 1-2 (POST /audio): off,
 // the bridge's test tone, or this computer's microphone, which a recorder worklet sends back
 // over the same WebSocket (the browser asks for permission; it needs the sound context running).
@@ -383,35 +386,45 @@ class Player extends AudioWorkletProcessor {
     super();
     this.size = 65536; this.buf = new Float32Array(this.size * 2);
     this.w = 0; this.r = 0; this.frac = 0; this.target = 320; this.ema = 320; this.primed = false; this.calm = 0;
+    this.lastL = 0; this.lastR = 0; this.fromL = 0; this.fromR = 0; this.xf = 128; this.under = 0; this.skip = 0;
     const push = data => {
       const s = new Int16Array(data), n = s.length >> 1;
       for (let i = 0; i < n; i++, this.w++) {
         const k = (this.w % this.size) * 2;
         this.buf[k] = s[2 * i] / 32768; this.buf[k + 1] = s[2 * i + 1] / 32768;
       }
-      if (this.w - this.r > this.size / 2) { this.r = this.w - this.target; this.frac = 0; }
+      if (this.w - this.r > this.size / 2) { this.r = this.w - this.target; this.frac = 0; this.cut("skip"); }
     };
     this.port.onmessage = e => { if (e.data && e.data.port) e.data.port.onmessage = m => push(m.data); };
+  }
+  cut(what) {   // a discontinuity: cross-fade the next 128 frames in from the last sample played
+    this.xf = 0; this.fromL = this.lastL; this.fromR = this.lastR;
+    if (what) { this[what]++; this.port.postMessage({ under: this.under, skip: this.skip, target: this.target }); }
+  }
+  hold(L, R, i) {   // no data: the last sample decays (~5 ms) instead of stepping to zero
+    for (; i < L.length; i++) { L[i] = this.lastL *= 0.995; R[i] = this.lastR *= 0.995; }
   }
   process(_, outputs) {
     const L = outputs[0][0], R = outputs[0][1] || L, n = L.length, fill = this.w - this.r;
     if (!this.primed) {
-      if (fill < this.target) { L.fill(0); R.fill(0); return true; }
-      this.primed = true; this.ema = fill;
+      if (fill < this.target) { this.hold(L, R, 0); return true; }
+      this.primed = true; this.ema = fill; this.cut();
     }
-    if (fill > 4 * this.target) { this.r = this.w - this.target; this.ema = this.target; }
+    if (fill > 4 * this.target) { this.r = this.w - this.target; this.ema = this.target; this.cut("skip"); }
     this.ema += 0.01 * (fill - this.ema);
     const ratio = 1 + Math.max(-0.003, Math.min(0.003, 0.003 * (this.ema - this.target) / this.target));
     if (++this.calm > 344 * 10 && this.target > 320) { this.target = Math.max(320, this.target - 32); this.calm = 0; }
     for (let i = 0; i < n; i++) {
-      if (this.w - this.r < 2) {                 // underrun: silence, then rebuffer to a larger target
-        L.fill(0, i); R.fill(0, i);
-        this.primed = false; this.calm = 0; this.target = Math.min(1536, this.target + 128);
+      if (this.w - this.r < 2) {                 // underrun: fade out, then rebuffer to a larger target
+        this.hold(L, R, i);
+        this.primed = false; this.calm = 0; this.target = Math.min(4096, this.target + 256);
+        this.cut("under");
         break;
       }
       const a = (this.r % this.size) * 2, b = ((this.r + 1) % this.size) * 2, t = this.frac;
-      L[i] = this.buf[a] + (this.buf[b] - this.buf[a]) * t;
-      R[i] = this.buf[a + 1] + (this.buf[b + 1] - this.buf[a + 1]) * t;
+      let l = this.buf[a] + (this.buf[b] - this.buf[a]) * t, r = this.buf[a + 1] + (this.buf[b + 1] - this.buf[a + 1]) * t;
+      if (this.xf < 128) { const g = ++this.xf / 128; l = this.fromL + (l - this.fromL) * g; r = this.fromR + (r - this.fromR) * g; }
+      L[i] = this.lastL = l; R[i] = this.lastR = r;
       this.frac += ratio;
       const step = Math.floor(this.frac);
       this.r += step; this.frac -= step;
@@ -457,7 +470,7 @@ onmessage = e => {
 };
 `;
 const soundBtn = document.getElementById("sound"), inBtn = document.getElementById("audioin");
-let actx = null, audioWorker = null, mic = null, micWanted = false, inState = "off";
+let actx = null, audioWorker = null, mic = null, micWanted = false, inState = "off", audioStats = { under: 0, skip: 0, target: 320 };
 async function startAudio() {
   actx = new AudioContext({ sampleRate: 44100, latencyHint: 0 });
   await actx.audioWorklet.addModule(URL.createObjectURL(new Blob([WORKLET], { type: "text/javascript" })));
@@ -465,6 +478,10 @@ async function startAudio() {
   volNode = actx.createGain(); volNode.gain.value = vol; player.connect(volNode).connect(actx.destination);
   const ch = new MessageChannel();
   player.port.postMessage({ port: ch.port1 }, [ch.port1]);
+  player.port.onmessage = e => {
+    audioStats = e.data;
+    soundBtn.title = `page buffer: ${e.data.under} underruns, ${e.data.skip} skips, now ${Math.round(e.data.target / 44.1)} ms`;
+  };
   audioWorker = new Worker(URL.createObjectURL(new Blob([AUDIO_WORKER], { type: "text/javascript" })));
   audioWorker.postMessage({ port: ch.port2, url: `ws://${location.hostname}:__PCM__` }, [ch.port2]);
   actx.onstatechange = showSound;

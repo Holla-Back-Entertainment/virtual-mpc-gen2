@@ -506,7 +506,8 @@ def cmd_run(a):
     qemu, qimg = tool("qemu-system-aarch64"), tool("qemu-img")
     accel = accel_choice(a.accel)
     cpu = "host" if accel in ("hvf", "kvm") else "cortex-a55"
-    machine = ["-M", "virt", "-accel", accel if accel != "tcg" else "tcg,thread=multi", "-cpu", cpu, "-smp", "4", "-m", "2G"]
+    machine = ["-M", "virt", "-accel", accel if accel != "tcg" else "tcg,thread=multi", "-cpu", cpu, "-smp", "4", "-m", os.environ.get("MPCLAB_MEM", "4G")]
+    # ponytail: 2G had no headroom (app idles at ~860 MB, no swap); a guest out of RAM livelocks
 
     # The DTB is generated from the exact machine options used below; two -serial make
     # QEMU's virt create the second PL011 used for External MIDI.
