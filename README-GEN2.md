@@ -3,7 +3,7 @@
 A QEMU lab that boots the stock Akai MPC Gen 2 firmware 3.10.0 (rootfs verified block by
 block with its own dm-verity table) on a virtual arm64 machine, posing as an MPC XL
 (`MODEL=acvc`, default) or an MPC Live III (`MODEL=acvg`). It is a fork of the MPC Sample
-lab (`README.md` describes that one; most of `docs/` is still about the Sample). Use it to
+lab (`README-SAMPLE.md` describes that one; most of `docs/` is still about the Sample). Use it to
 try mods safely: nothing here writes to a real device.
 
 No firmware is in this repository. `firmware/extracted/{part1,part2,parr}` come from your own
