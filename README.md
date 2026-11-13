@@ -53,7 +53,7 @@ You need:
   unit's online update. It is one image for the XL, Live III, One, Key 37 and Force Gen 2.
 
 ```bash
-git clone https://github.com/hmukhwana/virtual-mpc-gen2.git && cd virtual-mpc-gen2
+git clone https://github.com/Holla-Back-Entertainment/virtual-mpc-gen2.git && cd virtual-mpc-gen2
 python3 tools/extract_update.py /path/to/MPC-3.10.0-Gen2-update.img   # checked against inputs.sha256
 python3 lab.py build                                                   # once, in Docker
 ```
