@@ -9,17 +9,18 @@
 // without one, and cross-fades into the next sound after any gap or skip.
 //
 // Two modes, picked from the device list (re-checked on every kAudioHardwarePropertyDevices change):
-//  - stereo (no "Virtual MPC XL" driver, or the Live III): POST /audio width 2; MPC Main 1/2 plays
-//    on the chosen speaker device. Same as before the driver existed.
-//  - driver (XL + driver present): POST /audio width 8 / in_width 4 / in "mic". MPC Out 1-8 go
-//    to the driver's output 9-16 (Live reads them on its input 1-8). The driver's input 9-16
-//    ("Computer", what Live plays to it): 1/2 -> the speaker monitor, 3/4 + 5/6 -> MPC Input
-//    1,2 + 3,4, sent back on the socket. The speaker monitor is Main 1/2 ("Hear MPC directly")
-//    + Computer 1/2, through a second 2-ch PlayerCore so the speaker's clock can drift freely.
-//    Whatever widths the VM honours (its POST reply) are used, so an older VM gives stereo in 8ch.
+//  - stereo (the "Virtual MPC" driver is not installed, or only the old 16-ch one is): POST /audio
+//    width 2; MPC Main 1/2 plays on the chosen speaker device.
+//  - driver (the model's hidden "... Engine" device is present): POST /audio width 32 / in_width 28
+//    / in "mic". AudioMap (AudioRouting.swift) has the per-model channel maps: VM playback k ->
+//    Engine output k (= Live's input k); Engine input j+2 (Live's output) -> VM capture j. Engine
+//    inputs 1/2 are Live's "Monitor" outs. The speaker plays MPC Main 1/2 ("Hear MPC Directly") +
+//    Monitor 1/2, each through its own 2-ch PlayerCore so the speaker's clock can drift freely.
+//    The Engine follows Live's rate (44.1 or 48 kHz): AUHAL converts the output side, RateConverter
+//    the input side. Whatever widths the VM honours (its POST reply) are used.
 //
 // Units are CoreAudio AUHAL (kAudioUnitSubType_HALOutput). Render threads only try-lock the
-// stream core; the driver's IO thread does short plain locks on the monitor core and TX ring.
+// stream core; the driver's IO thread does short plain locks on the monitor cores and TX ring.
 
 import AudioToolbox
 import CoreAudio
@@ -159,104 +160,100 @@ final class PlayerCore: @unchecked Sendable {
     }
 }
 
-// MARK: - Mac -> VM ring (S16 interleaved), filled by the driver's IO thread, drained by the socket queue
-
-final class TxRing: @unchecked Sendable {
-    let ch: Int, size = 16384
-    private let buf: UnsafeMutablePointer<Int16>
-    private var w = 0, r = 0
-    private let lock: os_unfair_lock_t = {
-        let l = os_unfair_lock_t.allocate(capacity: 1); l.initialize(to: os_unfair_lock()); return l
-    }()
-
-    init(channels: Int) { ch = channels; buf = .allocate(capacity: size * ch); buf.initialize(repeating: 0, count: size * ch) }
-    deinit { buf.deallocate(); lock.deallocate() }
-
-    /// n frames from non-interleaved buffers abl[first ..< first+ch]. Oldest frames drop on overflow.
-    func push(_ abl: UnsafeMutableAudioBufferListPointer, first: Int, _ n: Int) {
-        os_unfair_lock_lock(lock); defer { os_unfair_lock_unlock(lock) }
-        for c in 0..<ch {
-            guard first + c < abl.count, let p = abl[first + c].mData?.assumingMemoryBound(to: Float.self) else { continue }
-            for i in 0..<n { buf[((w + i) % size) * ch + c] = Int16(max(-32768, min(32767, (p[i] * 32768).rounded()))) }
-        }
-        w += n
-        if w - r > size { r = w - size }
-    }
-
-    func drain() -> Data {
-        os_unfair_lock_lock(lock); defer { os_unfair_lock_unlock(lock) }
-        var d = Data(capacity: (w - r) * ch * 2)
-        while r < w {
-            let k = (r % size) * ch
-            for c in 0..<ch { var v = buf[k + c].littleEndian; withUnsafeBytes(of: &v) { d.append(contentsOf: $0) } }
-            r += 1
-        }
-        return d
-    }
-}
-
 // MARK: - Per-mode IO state (refCon of the render callbacks)
 
-private final class Engine: @unchecked Sendable {
+final class Engine: @unchecked Sendable {
     static let maxFrames = 8192
     let width: Int                     // VM -> Mac channels
+    let devOut: Int, devIn: Int        // Engine device channels in use (0 = stereo mode)
     let stream: PlayerCore
-    let monitor: PlayerCore?           // driver mode: Main 1/2 + Computer 1/2 -> speaker
-    let tx: TxRing?                    // driver mode: Computer 3-6 -> VM (in_width channels)
+    let monMain: PlayerCore?           // driver mode: MPC Main 1/2 -> speaker (when hearDirect)
+    let monLive: PlayerCore?           // driver mode: Live's Monitor 1/2 -> speaker
+    let tx: TxRing?                    // driver mode: Engine inputs 3.. -> VM capture 1..
+    let conv: RateConverter?           // driver mode: Engine input rate -> 44.1 kHz
     var hearDirect = true              // written from any thread
     var driverUnit: AudioUnit?
-    var inFrames = 0                   // driver IO thread only
-    let scratch: UnsafeMutablePointer<Float>, monScratch: UnsafeMutablePointer<Float>, mix: UnsafeMutablePointer<Float>
-    let inABL: UnsafeMutableAudioBufferListPointer   // the driver's 16 inputs
+    let scratch: UnsafeMutablePointer<Float>                         // stream render (driver or speaker thread)
+    let mix: UnsafeMutablePointer<Float>, mon: UnsafeMutablePointer<Float>   // driver IO thread
+    let spkA: UnsafeMutablePointer<Float>, spkB: UnsafeMutablePointer<Float> // speaker thread
+    let inABL: UnsafeMutableAudioBufferListPointer                   // the Engine's inputs, device rate
+    let inInter: UnsafeMutablePointer<Float>, inConv: UnsafeMutablePointer<Float>
 
-    init(width: Int, sendWidth: Int, driver: Bool) {
+    var driver: Bool { devOut > 0 }
+
+    init(width: Int, sendWidth: Int, devOut: Int = 0, devIn: Int = 0, inRate: Double = PlayerCore.sampleRate) {
         self.width = width
+        let drv = devOut > 0 && devIn >= 2
+        self.devOut = drv ? devOut : 0
+        self.devIn = drv ? devIn : 0
         stream = PlayerCore(channels: width)
-        monitor = driver ? PlayerCore(channels: 2) : nil
-        tx = driver && sendWidth > 0 ? TxRing(channels: sendWidth) : nil
-        scratch = .allocate(capacity: Self.maxFrames * width)
-        monScratch = .allocate(capacity: Self.maxFrames * 2)
-        mix = .allocate(capacity: Self.maxFrames * 2)
-        inABL = AudioBufferList.allocate(maximumBuffers: 16)
-        for k in 0..<16 {
-            let p = UnsafeMutablePointer<Float>.allocate(capacity: Self.maxFrames); p.initialize(repeating: 0, count: Self.maxFrames)
-            inABL[k] = AudioBuffer(mNumberChannels: 1, mDataByteSize: UInt32(Self.maxFrames * 4), mData: p)
+        monMain = drv ? PlayerCore(channels: 2) : nil
+        monLive = drv ? PlayerCore(channels: 2) : nil
+        tx = drv && sendWidth > 0 ? TxRing(channels: sendWidth) : nil
+        conv = drv ? RateConverter(channels: devIn, from: inRate, to: PlayerCore.sampleRate) : nil
+        let m = Self.maxFrames, ins = max(1, self.devIn)
+        scratch = .allocate(capacity: m * width)
+        mix = .allocate(capacity: m * 2); mon = .allocate(capacity: m * 2)
+        spkA = .allocate(capacity: m * 2); spkB = .allocate(capacity: m * 2)
+        inInter = .allocate(capacity: m * ins); inConv = .allocate(capacity: m * ins)
+        inABL = AudioBufferList.allocate(maximumBuffers: ins)
+        for k in 0..<ins {
+            let p = UnsafeMutablePointer<Float>.allocate(capacity: m); p.initialize(repeating: 0, count: m)
+            inABL[k] = AudioBuffer(mNumberChannels: 1, mDataByteSize: UInt32(m * 4), mData: p)
         }
     }
     deinit {
-        scratch.deallocate(); monScratch.deallocate(); mix.deallocate()
+        scratch.deallocate(); mix.deallocate(); mon.deallocate(); spkA.deallocate(); spkB.deallocate()
+        inInter.deallocate(); inConv.deallocate()
         for b in inABL { b.mData?.deallocate() }
         free(inABL.unsafeMutablePointer)
     }
 
-    /// Driver output: MPC Out 1..width -> device channels 9.., zeros elsewhere; feed the monitor.
+    /// Engine output: VM channel k -> device channel k (Live's input k), zeros past the map; feed
+    /// the Main 1/2 monitor.
     func renderDriver(_ abl: UnsafeMutableAudioBufferListPointer, _ n: Int) {
         stream.render(scratch, n)
         for k in 0..<abl.count {
             guard let p = abl[k].mData?.assumingMemoryBound(to: Float.self) else { continue }
-            let c = k - 8
-            if c >= 0 && c < width { for i in 0..<n { p[i] = scratch[i * width + c] } }
+            if k < width && k < devOut { for i in 0..<n { p[i] = scratch[i * width + k] } }
             else { p.update(repeating: 0, count: n) }
         }
-        guard let monitor else { return }
+        guard let monMain else { return }
         let hear: Float = hearDirect ? 1 : 0, rc = width > 1 ? 1 : 0
-        let have = inFrames >= n
-        let cl = have ? inABL[8].mData?.assumingMemoryBound(to: Float.self) : nil
-        let cr = have ? inABL[9].mData?.assumingMemoryBound(to: Float.self) : nil
         for i in 0..<n {
-            mix[2 * i] = hear * scratch[i * width] + (cl?[i] ?? 0)
-            mix[2 * i + 1] = hear * scratch[i * width + rc] + (cr?[i] ?? 0)
+            mix[2 * i] = hear * scratch[i * width]
+            mix[2 * i + 1] = hear * scratch[i * width + rc]
         }
-        inFrames = 0
-        monitor.pushFloat(mix, n)
+        monMain.pushFloat(mix, n)
     }
 
-    /// Speaker output: stereo mode plays the stream's 1/2, driver mode plays the monitor.
+    /// Engine input (inABL holds n device-rate frames): to 44.1 kHz, Monitor 1/2 -> speaker,
+    /// inputs 3.. -> VM capture 1.. (silence past what this model has).
+    func captured(_ n: Int) {
+        guard let conv, n > 0 else { return }
+        let ch = devIn
+        for c in 0..<ch {
+            guard c < inABL.count, let p = inABL[c].mData?.assumingMemoryBound(to: Float.self) else {
+                for i in 0..<n { inInter[i * ch + c] = 0 }; continue
+            }
+            for i in 0..<n { inInter[i * ch + c] = p[i] }
+        }
+        let m = conv.process(inInter, n, inConv, maxOut: Self.maxFrames)
+        for i in 0..<m { mon[2 * i] = inConv[i * ch]; mon[2 * i + 1] = inConv[i * ch + 1] }
+        monLive?.pushFloat(mon, m)
+        tx?.push(inConv, stride: ch, first: 2, m)
+    }
+
+    /// Speaker output: stereo mode plays the stream's 1/2, driver mode Main 1/2 + Monitor 1/2.
     func renderSpeaker(_ l: UnsafeMutablePointer<Float>, _ r: UnsafeMutablePointer<Float>, _ n: Int) {
-        let core = monitor ?? stream, src = monitor == nil ? scratch : monScratch   // own scratch per IO thread
-        core.render(src, n)
-        let w = core.ch, rc = w > 1 ? 1 : 0
-        for i in 0..<n { l[i] = src[i * w]; r[i] = src[i * w + rc] }
+        if let monMain, let monLive {
+            monMain.render(spkA, n); monLive.render(spkB, n)
+            for i in 0..<n { l[i] = spkA[2 * i] + spkB[2 * i]; r[i] = spkA[2 * i + 1] + spkB[2 * i + 1] }
+            return
+        }
+        stream.render(scratch, n)
+        let w = width, rc = w > 1 ? 1 : 0
+        for i in 0..<n { l[i] = scratch[i * w]; r[i] = scratch[i * w + rc] }
     }
 }
 
@@ -289,22 +286,22 @@ private func driverInput(_ refCon: UnsafeMutableRawPointer, _ flags: UnsafeMutab
     guard let u = e.driverUnit else { return noErr }
     let n = min(Int(frames), Engine.maxFrames)
     for k in 0..<e.inABL.count { e.inABL[k].mDataByteSize = UInt32(n * 4) }
-    guard AudioUnitRender(u, flags, ts, 1, UInt32(n), e.inABL.unsafeMutablePointer) == noErr else { e.inFrames = 0; return noErr }
-    e.inFrames = n
-    e.tx?.push(e.inABL, first: 10, n)                  // Computer 3-6 = device inputs 11-14
+    guard AudioUnitRender(u, flags, ts, 1, UInt32(n), e.inABL.unsafeMutablePointer) == noErr else { return noErr }
+    e.captured(n)
     return noErr
 }
 
 // MARK: - Public player
 
 final class PCMPlayer: @unchecked Sendable {
-    static let driverUID = "VirtualMPCXL_UID"
-    private let port: UInt16, panel: Int, allowDriver: Bool
+    private let port: UInt16, panel: Int, map: AudioMap?
     private let q = DispatchQueue(label: "mpclab.pcmplayer")   // guards everything below
     private var running = false
     private var engine: Engine?
     private var speaker: AudioUnit?, driverUnit: AudioUnit?
-    private var driverID: AudioDeviceID?                       // non-nil = driver mode
+    private var driverID: AudioDeviceID?                       // the model's Engine device; non-nil = driver mode
+    private var legacy = false                                 // only the old 16-ch driver is installed
+    private var widths = (out: 2, in: 0)                       // what the VM honours
     private var modeLine = ""                                  // last logged mode
     private var _deviceUID: String?
     private var _hearDirect = true
@@ -314,10 +311,11 @@ final class PCMPlayer: @unchecked Sendable {
     private var task: URLSessionWebSocketTask?
     private var rest = Data()                                  // partial frame carried between messages
     private var listener: AudioObjectPropertyListenerBlock?
+    private var rateListener: (AudioDeviceID, AudioObjectPropertyListenerBlock)?
     private let log = Logger(subsystem: "mpclab", category: "PCMPlayer")
 
-    /// allowDriver: route through the "Virtual MPC XL" device when it is installed (XL only).
-    init(port: UInt16, panel: Int, allowDriver: Bool) { self.port = port; self.panel = panel; self.allowDriver = allowDriver }
+    /// map: the model's driver devices; nil = always stereo.
+    init(port: UInt16, panel: Int, map: AudioMap?) { self.port = port; self.panel = panel; self.map = map }
 
     /// nil = system default output (follows default-device changes). Setting it while running switches device.
     var deviceUID: String? {
@@ -337,7 +335,7 @@ final class PCMPlayer: @unchecked Sendable {
         set { q.async { [self] in _volume = max(0, min(1, newValue)); engine?.stream.volume = _volume } }
     }
 
-    /// e.g. "stereo" or "Virtual MPC XL: 8 out / 4 in", for the Audio menu.
+    /// e.g. "stereo" or "Virtual MPC XL: 32 out / 28 in, 44.1 kHz", for the Audio menu.
     var mode: String { q.sync { modeLine.isEmpty ? "starting" : modeLine } }
 
     var stats: (under: Int, skip: Int, targetFrames: Int) { q.sync { engine?.stream.snapshot() ?? (0, 0, 0) } }
@@ -359,6 +357,7 @@ final class PCMPlayer: @unchecked Sendable {
             task?.cancel(with: .goingAway, reason: nil); task = nil
             session?.invalidateAndCancel(); session = nil
             removeListener()
+            removeRateListener()
             stopUnits()
             engine = nil
         }
@@ -366,36 +365,57 @@ final class PCMPlayer: @unchecked Sendable {
 
     // MARK: mode
 
+    private func findEngine() -> AudioDeviceID? { map.flatMap { Self.deviceID(forUID: $0.engineUID) } }
+
     /// Pick the mode from the device list, then (re)connect; connect() sizes the engine.
     private func rebuild() {                 // on q
-        let drv = allowDriver ? Self.deviceID(forUID: Self.driverUID) : nil
-        if drv != driverID { stopUnits(); engine = nil }
+        let drv = findEngine()
+        if drv != driverID { stopUnits(); engine = nil; removeRateListener() }
         let leaving = driverID != nil && drv == nil
         driverID = drv
-        if let drv { Self.setRate(drv) }
+        legacy = drv == nil && map != nil && Self.deviceID(forUID: AudioMap.legacyUID) != nil
+        if let drv { installRateListener(drv) }
         connect(leaving: leaving)
     }
 
     private func requestBody(leaving: Bool) -> [String: Any] {
-        if driverID != nil { return ["width": 8, "in_width": 4, "in": "mic"] }
+        if driverID != nil { return ["width": AudioMap.requestWidth, "in_width": AudioMap.requestInWidth, "in": "mic"] }
         return leaving ? ["width": 2, "in_width": 2, "in": "off"] : ["width": 2, "in_width": 2]
     }
 
     /// The VM's reply says what it honours; an older VM omits the keys (= stereo).
     private func adopt(_ reply: [String: Any]?) {   // on q
-        let width = max(1, min(8, reply?["width"] as? Int ?? 2))
-        let inWidth = driverID == nil ? 0 : max(0, min(4, reply?["in_width"] as? Int ?? 2))
-        if let e = engine, e.width == width, (e.tx?.ch ?? 0) == inWidth { return }
+        let width = max(1, min(32, reply?["width"] as? Int ?? 2))
+        let inWidth = driverID == nil ? 0 : max(0, min(32, reply?["in_width"] as? Int ?? 2))
+        if let e = engine, e.width == width, (e.tx?.ch ?? 0) == inWidth, e.driver == (driverID != nil) { return }
+        widths = (width, inWidth)
+        restartEngine()
+    }
+
+    /// New Engine for the current widths, device channels and device rate; restarts the units.
+    private func restartEngine() {           // on q
         stopUnits()
-        let e = Engine(width: width, sendWidth: inWidth, driver: driverID != nil)
+        var devOut = 0, devIn = 0, rate = PlayerCore.sampleRate
+        if let drv = driverID, let map {
+            devOut = min(map.engineOuts, Self.channels(drv, kAudioObjectPropertyScopeOutput))
+            devIn = min(map.engineIns, Self.channels(drv, kAudioObjectPropertyScopeInput))
+            rate = Self.nominalRate(drv) ?? rate
+        }
+        let e = Engine(width: widths.out, sendWidth: widths.in, devOut: devOut, devIn: devIn, inRate: rate)
         e.hearDirect = _hearDirect; e.stream.volume = _volume
         engine = e
         startUnits()
-        let line = driverID == nil ? "stereo" : "Virtual MPC XL: \(width) out / \(inWidth) in"
+        let line: String
+        if let map, driverID != nil, e.driver {
+            let khz = rate == 44100 ? "44.1" : String(format: "%g", rate / 1000)
+            line = "\(map.device): \(min(widths.out, e.devOut)) out / \(min(widths.in, map.captureChannels)) in, \(khz) kHz"
+        } else if driverID != nil {
+            line = "stereo (\(map?.device ?? "driver") Engine has no channels)"
+        } else {
+            line = legacy ? "stereo (old Virtual MPC XL driver: reinstall the driver)" : "stereo"
+        }
         if line != modeLine { modeLine = line; Self.fileLog("audio mode: \(line)") }
     }
-
-    // MARK: socket
 
     private func connect(leaving: Bool = false) {   // on q
         guard running else { return }
@@ -478,8 +498,9 @@ final class PCMPlayer: @unchecked Sendable {
 
     private func startUnits() {              // on q, engine set
         guard let e = engine else { return }
-        if let drv = driverID {
-            driverUnit = makeUnit(device: drv, channels: 16, e, render: driverRender, input: driverInput)
+        if let drv = driverID, e.driver {
+            driverUnit = makeUnit(device: drv, channels: UInt32(e.devOut), e, render: driverRender,
+                                  input: driverInput, inChannels: UInt32(e.devIn), inRate: e.conv.map { $0.step * PlayerCore.sampleRate })
             e.driverUnit = driverUnit
         }
         startSpeaker()
@@ -493,15 +514,20 @@ final class PCMPlayer: @unchecked Sendable {
             id = Self.defaultOutputDevice() ?? 0
         }
         guard id != 0 else { return }
-        if driverID != nil && id == driverID {        // monitor into the loopback would feed back
-            Self.fileLog("speaker is Virtual MPC XL; no monitor output")
+        if let uid = Self.stringProperty(id, kAudioDevicePropertyDeviceUID), AudioMap.allUIDs.contains(uid) {
+            // the monitor into a Virtual MPC device would come back on its own input
+            Self.fileLog("speaker is a Virtual MPC device (\(uid)); no monitor output")
             return
         }
         speaker = makeUnit(device: id, channels: 2, e, render: speakerRender, input: nil)
     }
 
+    /// AUHAL on `device`: render callback for `channels` outputs at 44.1 kHz (AUHAL converts to the
+    /// device rate); with `input`, also `inChannels` inputs at the device's own rate `inRate`
+    /// (AUHAL cannot convert rate on the input side).
     private func makeUnit(device: AudioDeviceID, channels: UInt32, _ e: Engine,
-                          render: AURenderCallback, input: AURenderCallback?) -> AudioUnit? {
+                          render: AURenderCallback, input: AURenderCallback?,
+                          inChannels: UInt32 = 0, inRate: Double? = nil) -> AudioUnit? {
         var desc = AudioComponentDescription(componentType: kAudioUnitType_Output,
                                              componentSubType: kAudioUnitSubType_HALOutput,
                                              componentManufacturer: kAudioUnitManufacturer_Apple,
@@ -518,18 +544,21 @@ final class PCMPlayer: @unchecked Sendable {
         var id = device
         _ = check(AudioUnitSetProperty(u, kAudioOutputUnitProperty_CurrentDevice, kAudioUnitScope_Global, 0,
                                        &id, UInt32(MemoryLayout<AudioDeviceID>.size)), "CurrentDevice")
-        var fmt = AudioStreamBasicDescription(mSampleRate: PlayerCore.sampleRate,
-                                              mFormatID: kAudioFormatLinearPCM,
-                                              mFormatFlags: kAudioFormatFlagsNativeFloatPacked | kAudioFormatFlagIsNonInterleaved,
-                                              mBytesPerPacket: 4, mFramesPerPacket: 1, mBytesPerFrame: 4,
-                                              mChannelsPerFrame: channels, mBitsPerChannel: 32, mReserved: 0)
+        func format(_ rate: Double, _ ch: UInt32) -> AudioStreamBasicDescription {
+            AudioStreamBasicDescription(mSampleRate: rate, mFormatID: kAudioFormatLinearPCM,
+                                        mFormatFlags: kAudioFormatFlagsNativeFloatPacked | kAudioFormatFlagIsNonInterleaved,
+                                        mBytesPerPacket: 4, mFramesPerPacket: 1, mBytesPerFrame: 4,
+                                        mChannelsPerFrame: ch, mBitsPerChannel: 32, mReserved: 0)
+        }
+        var fmt = format(PlayerCore.sampleRate, channels)
         let fsz = UInt32(MemoryLayout<AudioStreamBasicDescription>.size)
         _ = check(AudioUnitSetProperty(u, kAudioUnitProperty_StreamFormat, kAudioUnitScope_Input, 0, &fmt, fsz), "StreamFormat out")
         var cb = AURenderCallbackStruct(inputProc: render, inputProcRefCon: ref)
         _ = check(AudioUnitSetProperty(u, kAudioUnitProperty_SetRenderCallback, kAudioUnitScope_Input, 0,
                                        &cb, UInt32(MemoryLayout<AURenderCallbackStruct>.size)), "SetRenderCallback")
         if let input {
-            _ = check(AudioUnitSetProperty(u, kAudioUnitProperty_StreamFormat, kAudioUnitScope_Output, 1, &fmt, fsz), "StreamFormat in")
+            var ifmt = format(inRate ?? PlayerCore.sampleRate, inChannels)
+            _ = check(AudioUnitSetProperty(u, kAudioUnitProperty_StreamFormat, kAudioUnitScope_Output, 1, &ifmt, fsz), "StreamFormat in")
             var icb = AURenderCallbackStruct(inputProc: input, inputProcRefCon: ref)
             _ = check(AudioUnitSetProperty(u, kAudioOutputUnitProperty_SetInputCallback, kAudioUnitScope_Global, 0,
                                            &icb, UInt32(MemoryLayout<AURenderCallbackStruct>.size)), "SetInputCallback")
@@ -555,6 +584,30 @@ final class PCMPlayer: @unchecked Sendable {
         startSpeaker()
     }
 
+    /// Live (or anyone) changed the pair's rate: the Engine's input side must match it, rebuild.
+    private func installRateListener(_ dev: AudioDeviceID) {   // on q
+        removeRateListener()
+        let block: AudioObjectPropertyListenerBlock = { [weak self] _, _ in
+            guard let self else { return }
+            self.q.async {
+                guard self.running, self.driverID == dev, self.engine != nil else { return }
+                Self.fileLog("Engine rate now \(Self.nominalRate(dev) ?? 0) Hz; restarting audio")
+                self.restartEngine()
+            }
+        }
+        var addr = AudioObjectPropertyAddress(mSelector: kAudioDevicePropertyNominalSampleRate,
+                                              mScope: kAudioObjectPropertyScopeGlobal, mElement: kAudioObjectPropertyElementMain)
+        if AudioObjectAddPropertyListenerBlock(dev, &addr, nil, block) == noErr { rateListener = (dev, block) }
+    }
+
+    private func removeRateListener() {      // on q
+        guard let (dev, block) = rateListener else { return }
+        var addr = AudioObjectPropertyAddress(mSelector: kAudioDevicePropertyNominalSampleRate,
+                                              mScope: kAudioObjectPropertyScopeGlobal, mElement: kAudioObjectPropertyElementMain)
+        AudioObjectRemovePropertyListenerBlock(dev, &addr, nil, block)
+        rateListener = nil
+    }
+
     /// HALOutput does not follow the system default by itself, and a device that is unplugged
     /// and replugged comes back with a new ID: re-point the speaker when the default changes
     /// (deviceUID == nil) or the device list changes; switch modes when the driver comes or goes.
@@ -567,7 +620,7 @@ final class PCMPlayer: @unchecked Sendable {
             let listChanged = addrs.pointee.mSelector == kAudioHardwarePropertyDevices
             self.q.async {
                 guard self.running else { return }
-                if listChanged, (self.allowDriver ? Self.deviceID(forUID: Self.driverUID) : nil) != self.driverID {
+                if listChanged, self.findEngine() != self.driverID {
                     self.rebuild(); return
                 }
                 if listChanged || self._deviceUID == nil { self.applyDevice() }
@@ -605,7 +658,7 @@ final class PCMPlayer: @unchecked Sendable {
 
     // MARK: device enumeration
 
-    /// CoreAudio devices with at least one output channel, minus the driver (it is not a speaker).
+    /// CoreAudio devices with at least one output channel, minus the driver's (they are not speakers).
     static func outputDevices() -> [(uid: String, name: String)] {
         var addr = AudioObjectPropertyAddress(mSelector: kAudioHardwarePropertyDevices,
                                               mScope: kAudioObjectPropertyScopeGlobal,
@@ -616,16 +669,17 @@ final class PCMPlayer: @unchecked Sendable {
         var ids = [AudioDeviceID](repeating: 0, count: Int(size) / MemoryLayout<AudioDeviceID>.size)
         guard AudioObjectGetPropertyData(sys, &addr, 0, nil, &size, &ids) == noErr else { return [] }
         return ids.compactMap { id in
-            guard outputChannels(id) > 0,
-                  let uid = stringProperty(id, kAudioDevicePropertyDeviceUID), uid != driverUID,
+            guard channels(id, kAudioObjectPropertyScopeOutput) > 0,
+                  let uid = stringProperty(id, kAudioDevicePropertyDeviceUID), !AudioMap.allUIDs.contains(uid),
                   let name = stringProperty(id, kAudioObjectPropertyName) else { return nil }
             return (uid, name)
         }
     }
 
-    private static func outputChannels(_ id: AudioDeviceID) -> Int {
+    /// Channels of `id` in scope (input or output), from its stream configuration.
+    private static func channels(_ id: AudioDeviceID, _ scope: AudioObjectPropertyScope) -> Int {
         var addr = AudioObjectPropertyAddress(mSelector: kAudioDevicePropertyStreamConfiguration,
-                                              mScope: kAudioObjectPropertyScopeOutput,
+                                              mScope: scope,
                                               mElement: kAudioObjectPropertyElementMain)
         var size: UInt32 = 0
         guard AudioObjectGetPropertyDataSize(id, &addr, 0, nil, &size) == noErr, size > 0 else { return 0 }
@@ -671,85 +725,12 @@ final class PCMPlayer: @unchecked Sendable {
         return id
     }
 
-    /// AUHAL cannot rate-convert its input side: run the driver at the stream's 44.1 kHz.
-    private static func setRate(_ id: AudioDeviceID) {
+    private static func nominalRate(_ id: AudioDeviceID) -> Double? {
         var addr = AudioObjectPropertyAddress(mSelector: kAudioDevicePropertyNominalSampleRate,
                                               mScope: kAudioObjectPropertyScopeGlobal,
                                               mElement: kAudioObjectPropertyElementMain)
         var rate = 0.0, size = UInt32(MemoryLayout<Float64>.size)
-        guard AudioObjectGetPropertyData(id, &addr, 0, nil, &size, &rate) == noErr, rate != PlayerCore.sampleRate else { return }
-        rate = PlayerCore.sampleRate
-        let s = AudioObjectSetPropertyData(id, &addr, 0, nil, size, &rate)
-        fileLog("Virtual MPC XL rate -> 44100: \(s == noErr ? "ok" : "failed \(s)")")
-    }
-
-    // MARK: self-check (VirtualMPC --selftest)
-
-    static func selfTest() {
-        // 8-ch jitter buffer: channel c carries c*1000 + frame index; channels must never mix.
-        let core = PlayerCore(channels: 8), frames = 3000
-        var pcm = [Int16](repeating: 0, count: frames * 8)
-        for i in 0..<frames { for c in 0..<8 { pcm[i * 8 + c] = Int16(c * 1000 + i % 900) } }
-        pcm.withUnsafeBytes { core.push($0) }
-        let out = UnsafeMutablePointer<Float>.allocate(capacity: 512 * 8); defer { out.deallocate() }
-        core.render(out, 256)                          // primes + 128-frame cross-fade in from silence
-        for _ in 0..<4 {
-            core.render(out, 256)
-            for i in 0..<256 { for c in 0..<8 {
-                let v = out[i * 8 + c] * 32768 - Float(c * 1000)
-                precondition(v >= -1 && v <= 901, "channel \(c) frame \(i) leaked: \(v)")
-            } }
-        }
-        // drain to underrun: counted, target grows by 256, output fades instead of stepping
-        for _ in 0..<20 { core.render(out, 512) }
-        let s = core.snapshot()
-        precondition(s.under == 1 && s.targetFrames == 1280, "underrun handling: \(s)")
-        precondition(abs(out[511 * 8 + 7]) < abs(Float(7000) / 32768), "no fade on underrun")
-        // stereo S16 framing still works (width 2 = the old behaviour)
-        let st = PlayerCore(channels: 2)
-        [Int16](repeating: 16384, count: 2048 * 2).withUnsafeBytes { st.push($0) }
-        st.render(out, 256); st.render(out, 256)
-        precondition(abs(out[0] - 0.5) < 1e-4 && abs(out[1] - 0.5) < 1e-4, "stereo framing")
-        // TX ring: device inputs 11-14 (Computer 3-6) -> interleaved S16 MPC Input 1-4
-        let abl = AudioBufferList.allocate(maximumBuffers: 16); defer { for b in abl { b.mData?.deallocate() }; free(abl.unsafeMutablePointer) }
-        for k in 0..<16 {
-            let p = UnsafeMutablePointer<Float>.allocate(capacity: 4)
-            for i in 0..<4 { p[i] = Float(k) / 100 + Float(i) / 1000 }
-            abl[k] = AudioBuffer(mNumberChannels: 1, mDataByteSize: 16, mData: p)
-        }
-        let tx = TxRing(channels: 4)
-        tx.push(abl, first: 10, 4)
-        let d = tx.drain()
-        precondition(d.count == 4 * 4 * 2 && tx.drain().isEmpty, "tx size")
-        d.withUnsafeBytes { raw in
-            for i in 0..<4 { for c in 0..<4 {
-                let got = Int16(littleEndian: raw.loadUnaligned(fromByteOffset: (i * 4 + c) * 2, as: Int16.self))
-                let want = Int16((Float(10 + c) / 100 + Float(i) / 1000) * 32768)
-                precondition(abs(Int(got) - Int(want)) <= 1, "tx frame \(i) ch \(c): \(got) != \(want)")
-            } }
-        }
-        // driver render: MPC Out 1-8 land on device channels 9-16, 1-8 silent; monitor = Main + Computer 1/2
-        let e = Engine(width: 8, sendWidth: 4, driver: true)
-        pcm.withUnsafeBytes { e.stream.push($0) }
-        let dev = AudioBufferList.allocate(maximumBuffers: 16); defer { for b in dev { b.mData?.deallocate() }; free(dev.unsafeMutablePointer) }
-        for k in 0..<16 {
-            let p = UnsafeMutablePointer<Float>.allocate(capacity: 256); p.initialize(repeating: 9, count: 256)
-            dev[k] = AudioBuffer(mNumberChannels: 1, mDataByteSize: 1024, mData: p)
-        }
-        for k in 8..<10 { e.inABL[k].mData!.assumingMemoryBound(to: Float.self).update(repeating: 0.25, count: 256) }
-        e.renderDriver(dev, 256); e.inFrames = 256; e.renderDriver(dev, 256)
-        for k in 0..<16 {
-            let p = dev[k].mData!.assumingMemoryBound(to: Float.self)
-            let v = p[200] * 32768
-            if k < 8 { precondition(v == 0, "device out \(k + 1) not silent") }
-            else { precondition(v - Float((k - 8) * 1000) >= -1 && v - Float((k - 8) * 1000) <= 901, "device out \(k + 1) wrong: \(v)") }
-        }
-        let l = UnsafeMutablePointer<Float>.allocate(capacity: 4096), r = UnsafeMutablePointer<Float>.allocate(capacity: 4096)
-        defer { l.deallocate(); r.deallocate() }
-        for _ in 0..<4 { e.inFrames = 256; e.renderDriver(dev, 256) }     // fill the monitor past its 1024 target
-        e.renderSpeaker(l, r, 256); e.renderSpeaker(l, r, 256)
-        let main1 = (l[200] - 0.25) * 32768                                  // Computer 1 adds 0.25
-        precondition(main1 >= -2 && main1 <= 902, "monitor L = Main 1 + Computer 1: \(main1)")
-        print("PCMPlayer.selfTest OK")
+        guard AudioObjectGetPropertyData(id, &addr, 0, nil, &size, &rate) == noErr, rate > 0 else { return nil }
+        return rate
     }
 }

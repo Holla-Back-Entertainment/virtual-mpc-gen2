@@ -1,16 +1,27 @@
 #!/bin/sh
-# Lab only: the MPC XL's rear MIDI ports, MIDI In 1-2 and MIDI Out A-D.
+# Lab only: the rear MIDI ports: MIDI In 1-2 and Out A-D on the MPC XL, In 1-2 and Out A-B on the
+# MPC Live III (Akai's Live III guide: MIDI In 1, 2 and MIDI Out A, B).
 # The stock XL has no serial MIDI for them: they are USB MIDI behind its internal hub. Here a
 # configfs f_midi gadget on the third dummy UDC (kernel option dummy_hcd.num=3) stands in:
 # in_ports=2 (to the app: In 1, In 2), out_ports=4 (from the app: Out A-D; needs kernel patches
-# 0005, 0006). dummy_hcd loops it back, snd-usb-audio makes it an ordinary USB MIDI card ("MPC XL Rear",
-# ports "MPC XL Rear MIDI 1".."4"), then the relay carries each port to the host on its own
-# virtio-serial port. Not on the Live III (its rear MIDI is different; not modelled).
+# 0005, 0006, 0007). dummy_hcd loops it back, snd-usb-audio makes it an ordinary USB MIDI card
+# ("MPC XL Rear"; its ports are named from the jack names below), then the relay carries each port to the host on its own
+# virtio-serial port. The Live III gets the same with out_ports=2 ("MPC Live III Rear"), relayed on
+# midi_in1, _in2, _outa, _outb (its midi_outc/d QEMU ports stay unused). How the real Live III
+# connects its DIN ports internally is not known; this mirrors the XL's model.
 set -eu
 CODE=$(tr -d '\0' < /sys/firmware/devicetree/base/inmusic,product-code 2>/dev/null || true)
-[ "$CODE" = ACVG ] && { echo "MPC Live III: no rear MIDI gadget"; exec sleep infinity; }
+if [ "$CODE" = ACVG ]; then
+    # no "MIDI " in the jack names: a sequencer port name holds 31 characters, and
+    # "MPC Live III Rear MIDI In 1 / Out A" was cut to "... MIDI In 1 / O"
+    PRODUCT="MPC Live III Rear"; ID=L3RearMIDI; SERIAL=MPCLAB-REAR-0002; NOUT=2
+    IN_NAMES="In 1,In 2"; OUT_NAMES="In 1 / Out A,In 2 / Out B"
+else
+    PRODUCT="MPC XL Rear"; ID=XLRearMIDI; SERIAL=MPCLAB-REAR-0001; NOUT=4
+    IN_NAMES="MIDI In 1,MIDI In 2"
+    OUT_NAMES="MIDI In 1 / Out A,MIDI In 2 / Out B,MIDI Out C,MIDI Out D"
+fi
 G=/sys/kernel/config/usb_gadget/mpclab_rear
-ID=XLRearMIDI
 UDC=dummy_udc.2
 [ -e /sys/class/udc/$UDC ] || { echo "no $UDC: boot with dummy_hcd.num=3" >&2; exit 1; }
 
@@ -29,16 +40,25 @@ if [ ! -d $G ]; then
     echo 0x0100 > $G/bcdDevice
     mkdir $G/strings/0x409
     echo "MPC Lab" > $G/strings/0x409/manufacturer
-    echo "MPC XL Rear" > $G/strings/0x409/product
-    echo "MPCLAB-REAR-0001" > $G/strings/0x409/serialnumber
+    echo "$PRODUCT" > $G/strings/0x409/product
+    echo "$SERIAL" > $G/strings/0x409/serialnumber
     mkdir $G/configs/c.1 $G/functions/midi.rear
     echo 2 > $G/functions/midi.rear/in_ports
-    echo 4 > $G/functions/midi.rear/out_ports
+    echo $NOUT > $G/functions/midi.rear/out_ports
     echo $ID > $G/functions/midi.rear/id
     # no sequencer client for the gadget's own end (kernel patch 0006): the app would list its
     # ports f_midi-2 and f_midi-3 as MIDI inputs (it hides only the names f_midi-0 and f_midi-1)
     echo 1 > $G/functions/midi.rear/no_seq
+    # USB MIDI jack names (iJack, kernel patch 0007): snd-usb-audio names each port
+    # "<product> <jack name>" (without them "MPC XL Rear MIDI 1".."4"). The app lists ALSA
+    # sequencer ports, and the sequencer makes port N of a card ONE port for both directions,
+    # named after its output: ports 1-2 are In 1 + Out A and In 2 + Out B, so their out names
+    # carry both. Result in the app: "MPC XL Rear MIDI In 1 / Out A", "... In 2 / Out B" (MIDI IN
+    # and MIDI OUT lists), "MPC XL Rear MIDI Out C", "... Out D" (MIDI OUT only). Live III:
+    # "MPC Live III Rear In 1 / Out A", "... In 2 / Out B".
+    echo "$IN_NAMES" > $G/functions/midi.rear/in_names
+    echo "$OUT_NAMES" > $G/functions/midi.rear/out_names
     ln -s $G/functions/midi.rear $G/configs/c.1/
 fi
 [ "$(cat $G/UDC)" = "$UDC" ] || echo $UDC > $G/UDC
-exec /opt/mpclab/bin/mpclab-midi-relay $ID
+exec /opt/mpclab/bin/mpclab-midi-relay $ID $NOUT

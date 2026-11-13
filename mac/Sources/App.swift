@@ -6,14 +6,24 @@ import WebKit
 
 struct Model {
     let id: String, title: String, panel: Int, midi: UInt16, pcm: UInt16
-    /// Rear MIDI ports beyond External MIDI: (name suffix, lab TCP port, Mac -> MPC?). The XL's
-    /// MIDI In 1-2 (CoreMIDI destinations) and Out A-D (sources); lab.py PORTS midi_*.
+    /// The model's devices in the Virtual MPC driver and their channel map (AudioRouting.swift).
+    let audio: AudioMap
+    /// Rear MIDI ports beyond External MIDI: (name suffix, lab TCP port, Mac -> MPC?). MIDI In n
+    /// are CoreMIDI destinations, Out n sources; lab.py PORTS midi_*.
     var rearMIDI: [(String, UInt16, Bool)] = []
-    static let all = [Model(id: "acvc", title: "MPC XL", panel: 8865, midi: 5652, pcm: 5657,
+    static let all = [Model(id: "acvc", title: "MPC XL", panel: 8865, midi: 5652, pcm: 5657, audio: .xl,
                             rearMIDI: [("MIDI In 1", 5751, true), ("MIDI In 2", 5752, true),
                                        ("MIDI Out A", 5753, false), ("MIDI Out B", 5754, false),
                                        ("MIDI Out C", 5755, false), ("MIDI Out D", 5756, false)]),
-                      Model(id: "acvg", title: "MPC Live III", panel: 8875, midi: 5662, pcm: 5667)]
+                      Model(id: "acvg", title: "MPC Live III", panel: 8875, midi: 5662, pcm: 5667, audio: .live3,
+                            rearMIDI: [("MIDI In 1", 5761, true), ("MIDI In 2", 5762, true),
+                                       ("MIDI Out A", 5763, false), ("MIDI Out B", 5764, false)])]
+
+    /// CoreMIDI ports: External MIDI keeps one two-way port "Virtual <title>"; the rear ports are one-way.
+    var midiPorts: [(name: String, port: UInt16, toMPC: Bool, fromMPC: Bool)] {
+        [("Virtual \(title)", midi, true, true)] +
+            rearMIDI.map { ("Virtual \(title) \($0.0)", $0.1, $0.2, !$0.2) }
+    }
 }
 
 enum State: String { case stopped, starting, running, stopping = "shutting down" }
@@ -194,16 +204,11 @@ final class AppDelegate: NSObject, NSApplicationDelegate, NSWindowDelegate {
 
     func startBridges() {
         stopBridges()   // never two players fighting over the one audio socket
-        let pl = PCMPlayer(port: model.pcm, panel: model.panel, allowDriver: model.id == "acvc")   // the driver is the XL's
+        let pl = PCMPlayer(port: model.pcm, panel: model.panel, map: model.audio)
         pl.deviceUID = defaults.string(forKey: "audioDevice")
         pl.hearDirect = defaults.bool(forKey: "hearDirect")
         pl.start(); player = pl
-        // External MIDI keeps its one two-way port "Virtual MPC XL"; the XL adds In 1-2 / Out A-D
-        var specs = [(name: "Virtual \(model.title)", port: model.midi, toMPC: true, fromMPC: true)]
-        for (n, p, toMPC) in model.rearMIDI {
-            specs.append((name: "Virtual \(model.title) \(n)", port: p, toMPC: toMPC, fromMPC: !toMPC))
-        }
-        for s in specs {
+        for s in model.midiPorts {
             let b = MIDIBridge(name: s.name, port: s.port, toMPC: s.toMPC, fromMPC: s.fromMPC)
             do { try b.start(); bridges.append(b) } catch { log("MIDI bridge \(s.name) failed: \(error)") }
         }
@@ -279,7 +284,7 @@ extension AppDelegate: NSMenuDelegate, WKUIDelegate {
 enum Main {
     @MainActor static func main() {
         if CommandLine.arguments.contains("--selftest") {
-            MIDIBridge.selfTest(); PCMPlayer.selfTest(); exit(0)
+            MIDIBridge.selfTest(); PCMPlayer.selfTest(); Model.selfTest(); exit(0)
         }
         let app = NSApplication.shared
         let delegate = AppDelegate()

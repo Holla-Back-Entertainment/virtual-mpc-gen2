@@ -1,6 +1,9 @@
 #!/bin/bash
-# Removes the driver from the system HAL folder and restarts coreaudiod. Needs sudo.
+# Removes the driver (and the old VirtualMPCXL.driver) from the system HAL folder and restarts
+# coreaudiod. Needs sudo.
 set -euo pipefail
-DST="/Library/Audio/Plug-Ins/HAL/VirtualMPCXL.driver"
-if [[ -d "$DST" ]]; then sudo rm -rf "$DST"; echo "removed: $DST"; else echo "not installed"; fi
-sudo launchctl kickstart -k system/com.apple.audio.coreaudiod
+HAL="/Library/Audio/Plug-Ins/HAL"
+for d in VirtualMPC.driver VirtualMPCXL.driver; do
+    if [[ -d "$HAL/$d" ]]; then sudo rm -rf "$HAL/$d"; echo "removed: $HAL/$d"; fi
+done
+sudo killall coreaudiod   # kickstart is refused under SIP; launchd restarts it

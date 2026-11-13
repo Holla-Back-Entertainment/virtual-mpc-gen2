@@ -19,12 +19,14 @@ GET  /surface     surface handshake state, last LED / pad-colour state, recent M
 GET  /display/N.png  Q-Link display buffer N (0..16) as a PNG, ?scale=1..8 (default 4); 404 = not drawn yet
 POST /resync      make the app resend every light and display (status 2 on its next ping, <= 4 s)
 GET  /audio       {"in", "gain", "tone_hz", "width", "in_width", "bridge": linked, "levels": {"out":
-                  [peak per app output channel], "in": [inputs 1-4], "drop", "under"}, "levels_age": s}
+                  [peak per app output channel], "in": [peak per app input], "drop", "under"}, "levels_age": s}
                   (peaks over ~100 ms, 0..1)
-POST /audio       {"in": "off"|"tone"|"mic", "gain": 0..100, "tone_hz": Hz, "width": 2|8, "in_width": 2|4}
+POST /audio       {"in": "off"|"tone"|"mic", "gain": 0..100, "tone_hz": Hz, "width": 2|8|32,
+                   "in_width": 2|4|28|32}
                   (any subset of keys); "mic" = the host's microphone stream (the page asks for it).
-                  width: channels sent to the host on the pcm WebSocket (2 = main out, 8 = Out 1-8);
-                  in_width: channels the host sends back (2 = Input 1,2, 4 = Input 1-4)
+                  width: channels sent to the host on the pcm WebSocket (2 = main out, 8 = Out 1-8,
+                  32 = every app output, + USB Out 1-24); in_width: channels the host sends back
+                  (2 = Input 1,2, 4 = Input 1-4, 28 / 32 = app inputs 1-28 / 1-32)
 Sound does not pass here: the page plays the bridge's PCM straight from QEMU's WebSocket
 chardev "mpclab.pcm" (PORTS["pcm"]), as the Sample page does.
 
@@ -151,7 +153,7 @@ class Audio:
             st["gain"] = max(0, min(100, int(body["gain"])))
         if "tone_hz" in body:
             st["tone_hz"] = max(20, min(20000, float(body["tone_hz"])))
-        for key, ok in (("width", (2, 8)), ("in_width", (2, 4))):
+        for key, ok in (("width", (2, 8, 32)), ("in_width", (2, 4, 28, 32))):
             if key in body:
                 if body[key] not in ok:
                     raise ValueError(f"{key}: one of {', '.join(map(str, ok))}")
@@ -289,6 +291,7 @@ def selftest():
     assert c["model"] == "ACVG" and c["qlinks"] == 4 and "PLAY" in c["buttons"] and "NUMERIC_1" not in c["buttons"]
     assert routing_line({"in": "mic", "gain": 50, "tone_hz": 440.0}) == "routing out=on pair=0 in=host gain=50 tone_hz=440 width=2 in_width=2\n"
     assert routing_line({"in": "mic", "gain": 50, "tone_hz": 440.0, "width": 8, "in_width": 4}).endswith(" width=8 in_width=4\n")
+    assert routing_line({"in": "mic", "gain": 50, "tone_hz": 440.0, "width": 32, "in_width": 28}).endswith(" width=32 in_width=28\n")
     assert parse_levels("levels out 0.5 in 0.1 0.2 0.3 0.4 drop 0 under 1") == {"out": [0.5], "in": [0.1, 0.2, 0.3, 0.4], "drop": 0, "under": 1}
     lv = parse_levels("levels out 0.5000 0.2500 in 0.2500 0.2500 drop 3 under 0")
     assert lv == {"out": [0.5, 0.25], "in": [0.25, 0.25], "drop": 3, "under": 0}

@@ -11,11 +11,17 @@ if [ ! -d "$SRC" ]; then
 fi
 
 cd "$SRC"
+# .lab-patches lists the patches applied to this tree (the reverse dry-run alone misjudges a
+# patch once a later one has changed its context, e.g. 0006 under 0007, and applies it twice)
+touch .lab-patches
 for p in /lab/kernel/patches/*.patch; do
-    if patch -p1 -R -s -f --dry-run < "$p" >/dev/null 2>&1; then
-        echo "already applied: ${p##*/}"
+    n=${p##*/}
+    if grep -qx "$n" .lab-patches; then
+        echo "already applied: $n"
+    elif patch -p1 -R -s -f --dry-run < "$p" >/dev/null 2>&1; then
+        echo "$n" >> .lab-patches; echo "already applied: $n"
     else
-        patch -p1 -s < "$p"; echo "applied: ${p##*/}"
+        patch -p1 -s < "$p"; echo "$n" >> .lab-patches; echo "applied: $n"
     fi
 done
 make ARCH=arm64 CROSS_COMPILE=aarch64-linux-gnu- defconfig

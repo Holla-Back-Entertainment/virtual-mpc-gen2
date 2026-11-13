@@ -1,0 +1,233 @@
+f_midi: configfs options in_names / out_names, USB MIDI jack names (iJack) (lab only).
+
+f_midi gives every jack iJack = 0, so snd-usb-audio on the host names the ports
+"<product> MIDI 1".."N". With in_names / out_names (comma-separated, in port order) each named
+port's embedded and external jack get a string descriptor of that name, and snd-usb-audio names
+the port "<product> <name>" (or just <name> when it starts with the product name). The lab's
+XL rear-MIDI gadget sets "MIDI In 1,MIDI In 2" and "MIDI In 1 / Out A,..,MIDI Out D" (the ALSA
+sequencer names a port used both ways after its output; mpclab-midi-gadget). Unset (default):
+no extra strings, iJack 0, the stock descriptors byte for byte. Applies on top of 0005, 0006.
+--- a/drivers/usb/gadget/function/f_midi.c
++++ b/drivers/usb/gadget/function/f_midi.c
+@@ -95,6 +95,12 @@
+ 	char *id;
+ 	unsigned int buflen, qlen;
+ 	unsigned int no_seq;
++	/* jack_names: USB MIDI jack names (iJack) from configfs in_names / out_names */
++	char *jack_names[2];
++	unsigned int n_jack_strings;
++	struct usb_string jack_strings[2 + 2 * MAX_PORTS];
++	struct usb_gadget_strings jack_stringtab;
++	struct usb_gadget_strings *jack_stringtabs[2];
+ 	/* This fifo is used as a buffer ring for pre-allocated IN usb_requests */
+ 	DECLARE_KFIFO_PTR(in_req_fifo, struct usb_request *);
+ 	spinlock_t transmit_lock;
+@@ -877,6 +883,38 @@
+ }
+ 
+ /* MIDI function driver setup/binding */
++
++/* string id of jack name idx in the attached table, 0 (none) when unnamed */
++static u8 f_midi_jack_string(struct f_midi *midi, struct usb_string *us, unsigned int idx)
++{
++	if (!midi->n_jack_strings || idx >= midi->n_jack_strings || !*midi->jack_strings[idx].s)
++		return 0;
++	return us[idx].id;
++}
++
++/* split the comma-separated names into the per-instance string table: [0] the function's own
++ * string, then one per in port, one per out port ("" = unnamed: iJack stays 0) */
++static void f_midi_split_jack_names(struct f_midi *midi)
++{
++	unsigned int n = 0, k, j;
++
++	if (!midi->jack_names[0] && !midi->jack_names[1])
++		return;	/* stock: no jack strings */
++	midi->jack_strings[n++].s = midi_string_defs[STRING_FUNC_IDX].s;
++	for (k = 0; k < 2; k++) {
++		char *p = midi->jack_names[k];
++
++		for (j = 0; j < (k ? midi->out_ports : midi->in_ports); j++) {
++			char *name = p ? strsep(&p, ",") : NULL;
++
++			midi->jack_strings[n++].s = name ? strim(name) : "";
++		}
++	}
++	midi->n_jack_strings = n;
++	midi->jack_stringtab.language = 0x0409;
++	midi->jack_stringtab.strings = midi->jack_strings;
++	midi->jack_stringtabs[0] = &midi->jack_stringtab;
++}
+ 
+ static int f_midi_bind(struct usb_configuration *c, struct usb_function *f)
+ {
+@@ -896,9 +934,13 @@
+ 	if (status < 0)
+ 		goto fail_register;
+ 
+-	/* maybe allocate device-global string ID */
+-	us = usb_gstrings_attach(c->cdev, midi_strings,
+-				 ARRAY_SIZE(midi_string_defs));
++	/* maybe allocate device-global string ID; named jacks get one string each */
++	if (midi->n_jack_strings)
++		us = usb_gstrings_attach(c->cdev, midi->jack_stringtabs,
++					 midi->n_jack_strings);
++	else
++		us = usb_gstrings_attach(c->cdev, midi_strings,
++					 ARRAY_SIZE(midi_string_defs));
+ 	if (IS_ERR(us)) {
+ 		status = PTR_ERR(us);
+ 		goto fail;
+@@ -975,7 +1017,7 @@
+ 		in_ext->bDescriptorSubtype	= USB_MS_MIDI_IN_JACK;
+ 		in_ext->bJackType		= USB_MS_EXTERNAL;
+ 		in_ext->bJackID			= jack++;
+-		in_ext->iJack			= 0;
++		in_ext->iJack			= f_midi_jack_string(midi, us, 1 + n);
+ 		midi_function[i++] = (struct usb_descriptor_header *) in_ext;
+ 
+ 		out_emb->bLength		= USB_DT_MIDI_OUT_SIZE(1);
+@@ -986,7 +1028,7 @@
+ 		out_emb->bNrInputPins		= 1;
+ 		out_emb->pins[0].baSourcePin	= 1;
+ 		out_emb->pins[0].baSourceID	= in_ext->bJackID;
+-		out_emb->iJack			= 0;
++		out_emb->iJack			= in_ext->iJack;
+ 		midi_function[i++] = (struct usb_descriptor_header *) out_emb;
+ 
+ 		/* link it to the endpoint */
+@@ -1003,7 +1045,7 @@
+ 		in_emb->bDescriptorSubtype	= USB_MS_MIDI_IN_JACK;
+ 		in_emb->bJackType		= USB_MS_EMBEDDED;
+ 		in_emb->bJackID			= jack++;
+-		in_emb->iJack			= 0;
++		in_emb->iJack			= f_midi_jack_string(midi, us, 1 + midi->in_ports + n);
+ 		midi_function[i++] = (struct usb_descriptor_header *) in_emb;
+ 
+ 		out_ext->bLength =		USB_DT_MIDI_OUT_SIZE(1);
+@@ -1012,7 +1054,7 @@
+ 		out_ext->bJackType =		USB_MS_EXTERNAL;
+ 		out_ext->bJackID =		jack++;
+ 		out_ext->bNrInputPins =		1;
+-		out_ext->iJack =		0;
++		out_ext->iJack =		in_emb->iJack;
+ 		out_ext->pins[0].baSourceID =	in_emb->bJackID;
+ 		out_ext->pins[0].baSourcePin =	1;
+ 		midi_function[i++] = (struct usb_descriptor_header *) out_ext;
+@@ -1245,7 +1287,50 @@
+ }
+ 
+ CONFIGFS_ATTR(f_midi_opts_, id);
++
++/* in_names / out_names: comma-separated USB MIDI jack names, in port order */
++#define F_MIDI_OPT_NAMES(name)						\
++static ssize_t f_midi_opts_##name##_show(struct config_item *item, char *page) \
++{									\
++	struct f_midi_opts *opts = to_f_midi_opts(item);		\
++	ssize_t result;							\
++									\
++	mutex_lock(&opts->lock);					\
++	result = sprintf(page, "%s\n", opts->name ? opts->name : "");	\
++	mutex_unlock(&opts->lock);					\
++	return result;							\
++}									\
++									\
++static ssize_t f_midi_opts_##name##_store(struct config_item *item,	\
++					 const char *page, size_t len)	\
++{									\
++	struct f_midi_opts *opts = to_f_midi_opts(item);		\
++	int ret;							\
++	char *c;							\
++									\
++	mutex_lock(&opts->lock);					\
++	if (opts->refcnt > 1) {						\
++		ret = -EBUSY;						\
++		goto end;						\
++	}								\
++	c = kstrndup(page, len, GFP_KERNEL);				\
++	if (!c) {							\
++		ret = -ENOMEM;						\
++		goto end;						\
++	}								\
++	kfree(opts->name);						\
++	opts->name = c;							\
++	ret = len;							\
++end:									\
++	mutex_unlock(&opts->lock);					\
++	return ret;							\
++}									\
++									\
++CONFIGFS_ATTR(f_midi_opts_, name);
+ 
++F_MIDI_OPT_NAMES(in_names);
++F_MIDI_OPT_NAMES(out_names);
++
+ static struct configfs_attribute *midi_attrs[] = {
+ 	&f_midi_opts_attr_index,
+ 	&f_midi_opts_attr_buflen,
+@@ -1254,6 +1339,8 @@
+ 	&f_midi_opts_attr_out_ports,
+ 	&f_midi_opts_attr_no_seq,
+ 	&f_midi_opts_attr_id,
++	&f_midi_opts_attr_in_names,
++	&f_midi_opts_attr_out_names,
+ 	NULL,
+ };
+ 
+@@ -1279,6 +1366,8 @@
+ 	if (free) {
+ 		if (opts->id_allocated)
+ 			kfree(opts->id);
++		kfree(opts->in_names);
++		kfree(opts->out_names);
+ 		kfree(opts);
+ 	}
+ }
+@@ -1318,6 +1407,8 @@
+ 	mutex_lock(&opts->lock);
+ 	if (!--midi->free_ref) {
+ 		kfree(midi->id);
++		kfree(midi->jack_names[0]);
++		kfree(midi->jack_names[1]);
+ 		kfifo_free(&midi->in_req_fifo);
+ 		kfree(midi);
+ 		free = true;
+@@ -1390,6 +1481,14 @@
+ 	midi->buflen = opts->buflen;
+ 	midi->qlen = opts->qlen;
+ 	midi->no_seq = opts->no_seq;
++	midi->jack_names[0] = kstrdup(opts->in_names, GFP_KERNEL);
++	midi->jack_names[1] = kstrdup(opts->out_names, GFP_KERNEL);
++	if ((opts->in_names && !midi->jack_names[0]) ||
++	    (opts->out_names && !midi->jack_names[1])) {
++		status = -ENOMEM;
++		goto midi_free;
++	}
++	f_midi_split_jack_names(midi);
+ 	midi->in_last_port = 0;
+ 	midi->free_ref = 1;
+ 
+@@ -1412,8 +1511,11 @@
+ 	return &midi->func;
+ 
+ midi_free:
+-	if (midi)
++	if (midi) {
+ 		kfree(midi->id);
++		kfree(midi->jack_names[0]);
++		kfree(midi->jack_names[1]);
++	}
+ 	kfree(midi);
+ setup_fail:
+ 	mutex_unlock(&opts->lock);
+--- a/drivers/usb/gadget/function/u_midi.h
++++ b/drivers/usb/gadget/function/u_midi.h
+@@ -25,6 +25,8 @@
+ 	unsigned int			buflen;
+ 	unsigned int			qlen;
+ 	unsigned int			no_seq;
++	char				*in_names;
++	char				*out_names;
+ 
+ 	/*
+ 	 * Protect the data form concurrent access by read/write

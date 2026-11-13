@@ -5,13 +5,13 @@
 	<key>CFBundleDevelopmentRegion</key>
 	<string>en</string>
 	<key>CFBundleExecutable</key>
-	<string>VirtualMPCXL</string>
+	<string>VirtualMPC</string>
 	<key>CFBundleIdentifier</key>
-	<string>com.henryskillz.VirtualMPCXL</string>
+	<string>com.henryskillz.VirtualMPC</string>
 	<key>CFBundleInfoDictionaryVersion</key>
 	<string>6.0</string>
 	<key>CFBundleName</key>
-	<string>Virtual MPC XL</string>
+	<string>Virtual MPC</string>
 	<key>CFBundlePackageType</key>
 	<string>BNDL</string>
 	<key>CFBundleShortVersionString</key>
@@ -30,14 +30,14 @@
 	<string>NO</string>
 	<key>CFPlugInFactories</key>
 	<dict>
-		<key>6CF6A8DF-C635-4547-BD2C-59E86277AA29</key>
-		<string>VirtualMPCXL_Create</string>
+		<key>946F7BE5-CDA4-40E9-ABC9-D773871329E7</key>
+		<string>VirtualMPC_Create</string>
 	</dict>
 	<key>CFPlugInTypes</key>
 	<dict>
 		<key>443ABAB8-E7B3-491A-B985-BEB9187030DB</key>
 		<array>
-			<string>6CF6A8DF-C635-4547-BD2C-59E86277AA29</string>
+			<string>946F7BE5-CDA4-40E9-ABC9-D773871329E7</string>
 		</array>
 	</dict>
 </dict>

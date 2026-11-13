@@ -687,6 +687,27 @@ def cmd_preload(a):
                 f"(tail -n 3 /run/mpc-lab-ui-test/overlay.log 2>/dev/null; true)"))
 
 
+def cmd_content(a):
+    """Copy your own content (a real unit's /synths, or expansions you own) into the running VM."""
+    src = os.path.abspath(a.src)
+    if not os.path.isdir(src):
+        die(f"{a.src}: not a folder")
+    if a.user:
+        dst, pre, post = "/nvme/MPC Documents", "mkdir -p '/nvme/MPC Documents'", "sync"
+    else:
+        # /synths is the factory partition, mounted read-only like on the device. Keep paths as on a
+        # real unit (Demos/, Expansions/, Synths/<vendor - MPC - plugin>/); see README-GEN2.md.
+        dst, pre, post = "/synths", "mount -o remount,rw /synths", "sync; mount -o remount,ro /synths"
+    tar = subprocess.Popen(["tar", "-C", src, "-cf", "-", "."], stdout=subprocess.PIPE,
+                           env={**os.environ, "COPYFILE_DISABLE": "1"})   # no macOS ._ files
+    rc = subprocess.run(["ssh", *ssh_base(), "root@" + HOST,
+                         f"{pre} && tar -xf - -C '{dst}'; r=$?; {post}; exit $r"], stdin=tar.stdout).returncode
+    tar.stdout.close()
+    if tar.wait() != 0 or rc != 0:
+        die(f"copy into {dst} failed (tar {tar.returncode}, ssh {rc})")
+    print(f"copied {src} -> {dst}; restart the app to rescan: python3 lab.py ssh systemctl restart {APP_UNIT}")
+
+
 def cmd_stop(a):
     if not port_open(PORTS["qmp"]):
         die(f"the {MODELS[MODEL]['model']} VM (MODEL={MODEL}) is not running")
@@ -1133,12 +1154,15 @@ def main():
     ar.add_argument("--results", action="store_true", help="show script runner lines, card files and script logs")
     fr = sub.add_parser("firstrun", help="tap through the welcome wizard, NEW PROJECT and the info dialogs while they show")
     fr.add_argument("--timeout", type=int, default=300, help="seconds (default 300, enough for a fresh boot)")
+    ct = sub.add_parser("content", help="copy a folder of your own content into /synths (factory layout) or, with --user, /nvme/MPC Documents")
+    ct.add_argument("src")
+    ct.add_argument("--user", action="store_true", help="user content (expansions on a real unit's user drive)")
     for n in ("panel", "stop", "status", "selftest"):
         sub.add_parser(n)
     rs = sub.add_parser("reset", help="clean eMMC (/data, /factory) at next start; --nvme also wipes the internal NVMe")
     rs.add_argument("--nvme", action="store_true", help="also delete out/run/nvme.qcow2 (user projects on /nvme, /synths)")
     a = ap.parse_args()
-    {"build": cmd_build, "run": cmd_run, "panel": cmd_panel, "ssh": cmd_ssh, "preload": cmd_preload, "autorun": cmd_autorun,
+    {"build": cmd_build, "run": cmd_run, "panel": cmd_panel, "ssh": cmd_ssh, "preload": cmd_preload, "autorun": cmd_autorun, "content": cmd_content,
      "stop": cmd_stop, "reset": cmd_reset, "firstrun": cmd_firstrun, "status": cmd_status, "selftest": lambda _: selftest()}[a.cmd](a)
 
 

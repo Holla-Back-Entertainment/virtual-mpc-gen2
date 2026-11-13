@@ -1,4 +1,4 @@
-# Lab only: the MPC XL's rear MIDI In 1-2 / Out A-D (USB MIDI gadget + relay, one host TCP port each).
+# Lab only: the rear MIDI In 1-2 / Out A-D (XL), Out A-B (Live III) (USB MIDI gadget + relay, one host TCP port each).
 [Unit]
 Description=MPC lab rear MIDI ports
 After=acvs.service mpclab-cs.service

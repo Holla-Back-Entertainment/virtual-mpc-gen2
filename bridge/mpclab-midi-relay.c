@@ -1,10 +1,12 @@
-// mpclab-midi-relay: the MPC XL's rear MIDI ports, MIDI In 1-2 and MIDI Out A-D (lab only).
+// mpclab-midi-relay: the rear MIDI ports, MIDI In 1-2 and MIDI Out A-D on the XL, Out A-B on
+// the Live III (lab only).
 //
 // The stock XL has no serial MIDI: its DIN ports are USB MIDI behind the internal hub. The lab
 // plays that part with a configfs f_midi gadget (mpclab-midi-gadget: 2 ports to the app, 4 from
 // it) on the third dummy UDC; dummy_hcd loops it back, so snd-usb-audio gives the app an
 // ordinary USB MIDI card. This relay is the far end of those cables: it holds the gadget-side
-// rawmidi (card id argv[1], default XLRearMIDI) and gives every port its own virtio-serial port,
+// rawmidi (card id argv[1], default XLRearMIDI; argv[2] = Out ports, 1-4, default 4: the Live III
+// gadget has 2) and gives every port its own virtio-serial port,
 // raw MIDI bytes, no framing:
 //   /dev/virtio-ports/mpclab.midi_in1, _in2     host -> gadget output 0, 1 -> app input  In 1, In 2
 //   /dev/virtio-ports/mpclab.midi_outa .. _outd gadget input 0..3 -> host   app output Out A..D
@@ -15,15 +17,17 @@
 #include <fcntl.h>
 #include <poll.h>
 #include <stdio.h>
+#include <stdlib.h>
 #include <unistd.h>
 
 #define NIN 2                              // MIDI In 1-2: host -> app
-#define NOUT 4                             // MIDI Out A-D: app -> host
+#define NOUT 4                             // MIDI Out A-D: app -> host (at most)
 static const char *IN_LINK[NIN] = { "mpclab.midi_in1", "mpclab.midi_in2" };
 static const char *OUT_LINK[NOUT] = { "mpclab.midi_outa", "mpclab.midi_outb", "mpclab.midi_outc", "mpclab.midi_outd" };
 
 static snd_rawmidi_t *tx[NIN], *rx[NOUT];  // gadget output (to the app), gadget input (from the app)
 static int in_fd[NIN], out_fd[NOUT];
+static int nout = NOUT;
 
 static int open_link(const char *name) {
     char path[64];
@@ -36,6 +40,8 @@ static int open_link(const char *name) {
 
 int main(int argc, char **argv) {
     const char *card = argc > 1 ? argv[1] : "XLRearMIDI";
+    if (argc > 2 && (nout = atoi(argv[2])) < 1) nout = 1;
+    if (nout > NOUT) nout = NOUT;
     char name[64];
     // the gadget-side card appears a moment after the gadget is bound to its UDC
     int err = -1;
@@ -46,7 +52,7 @@ int main(int argc, char **argv) {
             if ((err = snd_rawmidi_open(NULL, &tx[p], name, SND_RAWMIDI_NONBLOCK)) < 0)
                 break;
         }
-        for (int q = 0; err >= 0 && q < NOUT; q++) {
+        for (int q = 0; err >= 0 && q < nout; q++) {
             snprintf(name, sizeof name, "hw:%s,0,%d", card, q);
             err = snd_rawmidi_open(&rx[q], NULL, name, SND_RAWMIDI_NONBLOCK);
         }
@@ -62,9 +68,9 @@ int main(int argc, char **argv) {
     }
     for (int p = 0; p < NIN; p++)
         if ((in_fd[p] = open_link(IN_LINK[p])) < 0) return 1;
-    for (int q = 0; q < NOUT; q++)
+    for (int q = 0; q < nout; q++)
         if ((out_fd[q] = open_link(OUT_LINK[q])) < 0) return 1;
-    fprintf(stderr, "midi relay: %s <-> mpclab.midi_in1,2 / midi_outa..d\n", card);
+    fprintf(stderr, "midi relay: %s <-> mpclab.midi_in1,2 / midi_outa..%c\n", card, 'a' + nout - 1);
 
     struct pollfd pfd[NIN + NOUT * 4];
     int hup[NIN] = { 0 };
@@ -73,7 +79,7 @@ int main(int argc, char **argv) {
         int n = 0;
         for (int p = 0; p < NIN; p++)        // a closed host side reads as POLLHUP: back off
             pfd[n++] = (struct pollfd){ .fd = in_fd[p], .events = hup[p] ? 0 : POLLIN };
-        for (int q = 0; q < NOUT; q++)
+        for (int q = 0; q < nout; q++)
             n += snd_rawmidi_poll_descriptors(rx[q], pfd + n, 4);
         if (poll(pfd, n, 200) < 0) {
             if (errno == EINTR) continue;
@@ -92,7 +98,7 @@ int main(int argc, char **argv) {
         }
         // app -> host (MIDI Out A-D). Nobody listening on the host: QEMU drops it or the port
         // stays full; either way drop rather than hold up the other ports.
-        for (int q = 0; q < NOUT; q++) {
+        for (int q = 0; q < nout; q++) {
             ssize_t r;
             while ((r = snd_rawmidi_read(rx[q], buf, sizeof buf)) > 0) {
                 unsigned char *b = buf;
