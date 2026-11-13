@@ -1,6 +1,6 @@
 # Virtual MPC Sample
 
-[English](README.md) · **Русский** · [中文](README.zh-CN.md)
+[English](README-SAMPLE.md) · **Русский** · [中文](README.zh-CN.md)
 
 Стоковая прошивка Akai MPC Sample (1.3.0.12) без изменений работает в QEMU, а весь прибор
 открывается в браузере: верхняя панель с живым экраном, пэдами, ручками и кнопками, задняя

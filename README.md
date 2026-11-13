@@ -23,11 +23,11 @@ Checked on both units, 13 Nov 2026.
 - Touchscreen: click and drag on the screen.
 - Pads with velocity (hit the centre for hard, the edge for soft) and pressure. Pad colours
   come from the app.
-- Every button. Q-Link knobs, data wheel, touch strip. The XL's 17 knob displays are drawn
+- Every printed key. Q-Link knobs, data wheel, touch strip. The XL's 17 knob displays are drawn
   from what the app sends.
 - Sound out of the main outs in your browser. Sound in from a test tone or your microphone,
   so sampling works.
-- Internal storage, SD card, save and load projects.
+- Internal storage and SD card. Projects save and come back after a reboot (reboot checked on the XL).
 - An XL and a Live III can run side by side.
 
 ## What does not
@@ -46,13 +46,14 @@ Checked on both units, 13 Nov 2026.
 
 You need:
 
-- macOS, Linux or Windows. Apple Silicon is fastest.
+- A Mac with Apple Silicon. That is what this was built and tested on. Linux and Windows
+  may work (the Sample lab it grew from runs there) but are untested here.
 - Python 3.9+, QEMU 9+ (`qemu-system-aarch64`, `qemu-img`), OpenSSH, Docker (build step only).
 - The MPC Gen 2 3.10.0 update image. Get it through the inMusic Software Center or your own
   unit's online update. It is one image for the XL, Live III, One, Key 37 and Force Gen 2.
 
 ```bash
-git clone <this repo> && cd virtual-mpc-gen2
+git clone https://github.com/hmukhwana/virtual-mpc-gen2.git && cd virtual-mpc-gen2
 python3 tools/extract_update.py /path/to/MPC-3.10.0-Gen2-update.img   # checked against inputs.sha256
 python3 lab.py build                                                   # once, in Docker
 ```
@@ -105,4 +106,4 @@ DJ, producer, builder. Melbourne.
 
 ## License
 
-MIT. See [LICENSE](LICENSE).
+MIT. See [LICENSE](LICENSE). Kernel patches in `kernel/patches/` are GPL-2.0.

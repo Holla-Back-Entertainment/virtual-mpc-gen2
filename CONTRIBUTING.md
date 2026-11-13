@@ -1,7 +1,7 @@
 # Contributing
 
-Issues and pull requests are welcome, in English, Russian or Chinese. The
-[roadmap](README.md#roadmap) lists where help counts most.
+Issues and pull requests are welcome. The most useful help right now is a run of the
+[tester checklists](testers/) on a real MPC XL or Live III.
 
 - **Never commit firmware**, factory content, files extracted from either, or device
   identifiers (serial numbers, keys). `firmware/`, `out/`, `sdcard/` and `share/` are

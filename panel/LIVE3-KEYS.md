@@ -14,7 +14,7 @@ SHIFT, the strip press name).
 
 ## Printed labels and the control behind them
 
-Page label (sub-label is the unofficial schematic's shifted function; none of those were tested) - control - evidence.
+Page label (sub-label is the shifted function as printed on Akai's product photo; none of those were tested with Shift) - control - evidence.
 
 | Printed key | Control | Status | Evidence |
 |---|---|---|---|

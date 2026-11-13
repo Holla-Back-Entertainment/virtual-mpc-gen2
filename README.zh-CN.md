@@ -1,6 +1,6 @@
 # Virtual MPC Sample
 
-[English](README.md) · [Русский](README.ru.md) · **中文**
+[English](README-SAMPLE.md) · [Русский](README.ru.md) · **中文**
 
 在 QEMU 中原样运行 Akai MPC Sample 的原厂固件（1.3.0.12），整台设备都在浏览器里：带实时屏幕、
 打击垫、旋钮和按键的顶部面板，带各种接口的背板，SD 卡槽和 USB-C。支持 macOS、Linux 和

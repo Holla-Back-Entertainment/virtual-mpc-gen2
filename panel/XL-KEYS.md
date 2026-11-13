@@ -15,8 +15,8 @@ not "dead". The TAP_TEMPO and QLINK_TRIGGER LEDs blink on their own and were ign
 | MUTE | Mute | works: toggles track mute (LED) |
 | SOLO | Solo | no visible reaction (nothing soloable selected) |
 | QLINK | Q-Link | works: opens the Q-Link screen |
-| USB_SELECT | USB select (added) | works: toast "USB Select 5-6" |
-| RECORD_TO_ARRANGE | Rec mode (added) | works: REC ARM chip switches SEQ to CLIP, SAMPLE LED changes; real label unconfirmed |
+| USB_SELECT | USB select (right wing) | works: toast "USB Select 5-6" |
+| RECORD_TO_ARRANGE | Arrange / Clip (under Loop on) | works: REC ARM chip switches SEQ to CLIP, SAMPLE LED changes; printed key confirmed from the product photo |
 | SET | Set | no visible reaction |
 | STEQ_SEQ_AUDITION | Audition | no visible reaction (LED only blinks) |
 | STEP_PREV / STEP_NEXT | Previous / Next | STEP_PREV: screen changes (page step); STEP_NEXT: screen changes |
@@ -43,7 +43,7 @@ not "dead". The TAP_TEMPO and QLINK_TRIGGER LEDs blink on their own and were ign
 | ERASE | Erase | LED only (needs playback) |
 | NOTE_REPEAT | Note repeat | no visible reaction |
 | SHIFT, SHIFT2 | Shift (both latch) | held: no screen change on its own; SHIFT2 shows a brief change while held |
-| PAD_PERFORM (added) | Pad perform | works: opens Pad Perform (chord/note modes) |
+| PAD_PERFORM | Notes (printed "Notes / Pad ctrl") | works: opens Pad Perform (chord/note modes) |
 | SAMPLER (added) | Sampler | works: opens Sampler (shows "Disk space low" dialog in this VM) |
 | XYFX (added) | XY FX | works: opens XYFX screen |
 | TAP_TEMPO | Tap tempo | no visible reaction |
@@ -57,7 +57,7 @@ not "dead". The TAP_TEMPO and QLINK_TRIGGER LEDs blink on their own and were ign
 | TC | TC on/off | works: TC LED and screen |
 | QUANTIZE | Quantize | no visible reaction |
 | LOOP_ON | Loop on | works: loop button state |
-| AUTOMATION | Auto | works: toast "Global Automation: Read" |
+| AUTOMATION | Read / write | works: toast "Global Automation: Read" |
 | PREV / NEXT / LOCATE / BAR_PREV / BAR_NEXT | < / > / Locate / << / >> | work: playhead and screen change |
 | RECORD / OVERDUB / STOP / PLAY / PLAY_START | Rec / Overdub / Stop / Play / Play start | work: PLAY LED lights while running, STOP LED lights when idle; RECORD and OVERDUB light REC/PLAY LEDs |
 | CURSOR_UP/DOWN/LEFT/RIGHT/CENTRE | arrows, centre | work: move selection in the screen |
@@ -67,13 +67,12 @@ not "dead". The TAP_TEMPO and QLINK_TRIGGER LEDs blink on their own and were ign
 | TOUCH_STRIP | strip | works: toast follows strip mode |
 | PAD 1..16 | pads | works: sound plays; velocity and pressure |
 
-Not on the page, from acvc.json: DELETE_KEY (no visible reaction), PRE_POST (LED only), PAD_BANK_SELECT (no reaction),
+Not on the page, from acvc.json: DELETE_KEY (no visible reaction), PAD_BANK_SELECT (no reaction),
 QLINK_TRIGGER (no reaction), FOOTSWITCH_1/2 (no reaction), TOUCH_STRIP_PRESS (the strip), QLINK1..17_TOUCH (the knobs).
 
-Wrong labels: none found; "Auto" is the AUTOMATION key (full name in its tooltip).
+Labels: corrected against the product photo on 13 Nov 2026 (see the layout pass below). PRE_POST is now on the page (right wing, LED only).
 
-Meter: `VU_*` and `MAIN_OUTPUT_METER_*` stayed at 0 on 3.10.0 while the metronome ran, pads sounded and the mixer
-screen was open, so the page hides the main-out meter and shows it only if a non-zero level ever arrives.
+Meters: an early pass saw them stay at 0. Later runs showed VU_* and MAIN_OUTPUT_* move on pad hits and AUDIO_IN_1/2 with input (README-GEN2.md, Audio). The page shows the main-out meter once a level arrives.
 
 ## Layout pass against the product photo (13 Nov 2026, late)
 Added: right wing (Gain 1, Gain 2, 3/4 rec gain, Dir/main as greyed analog knobs; Main volume = page playback level;
