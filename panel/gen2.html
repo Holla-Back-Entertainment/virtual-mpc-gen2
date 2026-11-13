@@ -33,7 +33,7 @@
 
   /* keys: black caps with a label and a thin light bar, as on the device */
   .keys { display: grid; gap: 6px; }
-  .k { background: var(--key); border: 1px solid var(--key-edge); border-bottom-width: 3px; border-radius: 4px; padding: 6px 2px 8px; font-size: 11px; letter-spacing: .01em; overflow-wrap: anywhere; text-transform: uppercase; color: #e9e9ec; position: relative; min-height: 30px; line-height: 1.15; }
+  .k { background: var(--key); border: 1px solid var(--key-edge); border-bottom-width: 3px; border-radius: 4px; padding: 6px 1px 8px; font-size: 11px; letter-spacing: -.02em; overflow-wrap: break-word; text-transform: uppercase; color: #e9e9ec; position: relative; min-height: 30px; line-height: 1.15; }
   .k::after { content: ""; position: absolute; left: 22%; right: 22%; bottom: 2px; height: 2px; border-radius: 1px; background: #2c2c31; }
   .k[data-led="1"]::after { background: #7a4a1a; }
   .k[data-led="2"]::after, .k[data-led="3"]::after { background: var(--amber); box-shadow: 0 0 6px var(--amber); }
@@ -49,13 +49,19 @@
   .step { width: 100%; height: 12px; border-radius: 2px; border: 1px solid #000; background: #24242a; padding: 0; }
   .step[data-led="1"] { background: #6a5a2a; } .step[data-led="2"], .step[data-led="3"] { background: var(--amber); box-shadow: 0 0 6px var(--amber); }
   .step.hit { filter: brightness(1.6); }
-  .q span { font-size: 11px; color: #a6a6ae; }
+  .q span { font-size: 11px; color: #ff6b7a; text-transform: uppercase; text-align: center; line-height: 1.1; letter-spacing: -.03em; }
+  .k small { display: block; color: #ff6b7a; font-size: 11px; margin-top: 2px; }   /* the red shifted function printed on the key */
+  .analog { display: grid; grid-template-columns: repeat(4, minmax(0, 1fr)); gap: 8px; }
+  .analog label { display: flex; flex-direction: column; align-items: center; gap: 4px; font-size: 11px; color: #a6a6ae; text-transform: uppercase; text-align: center; line-height: 1.1; }
+  .knob.dead { cursor: default; opacity: .6; }   /* analog on the real unit: never reaches the app */
+  .leftkeys { display: grid; grid-template-columns: minmax(0, 4fr) minmax(0, 1fr); gap: 10px; align-items: start; }
+  .leftkeys > div { display: flex; flex-direction: column; gap: 8px; }
   /* the 128x32 display above each knob, drawn from what the app sends (GET /surface displays) */
   canvas.oled { width: 100%; aspect-ratio: 4 / 1; background: #000; border: 1px solid #1d1d21; border-radius: 2px; image-rendering: pixelated; }
   canvas.oled.stale { opacity: .5; }
   .trackknob { display: grid; grid-template-columns: 52px minmax(0, 1fr); gap: 10px; align-items: center; }
 
-  .deck { background: var(--deck); color: #1a1a1c; padding: 12px; display: grid; grid-template-columns: minmax(0, 1.15fr) minmax(0, 1fr) minmax(0, 1.15fr); gap: 12px; align-items: start; }
+  .deck { background: var(--deck); color: #1a1a1c; padding: 12px; display: grid; grid-template-columns: minmax(0, 1.4fr) minmax(0, .85fr) minmax(0, 1.4fr); gap: 12px; align-items: start; }
   .block { border: 1px solid var(--deck-line); border-radius: 6px; padding: 8px; display: flex; flex-direction: column; gap: 8px; }
   .group { font-size: 11px; letter-spacing: .08em; text-transform: uppercase; color: #3a3a36; margin: 0; }
   .left { display: grid; grid-template-columns: 34px minmax(0, 1fr); gap: 10px; }
@@ -87,15 +93,26 @@
       <h1 class="brand"><small>VIRTUAL</small>__MODEL_SHORT__</h1>
       <div class="trackknob" data-xl-only><button class="knob" id="trackknob" aria-label="Track level knob. Drag up or down." title="Track level: drag up or down"></button><canvas class="oled" width="128" height="32" data-display="16" aria-hidden="true"></canvas></div>
       <div class="keys" style="grid-template-columns: repeat(2, 1fr)" data-keys="TRACKS:Tracks OUTPUTS:Outputs RETURNS:Returns SUBMIXES:Submixes TRACK_DEC:Trk − TRACK_INC:Trk +"></div>
-      <div class="keys" style="grid-template-columns: repeat(2, 1fr)" data-keys="RECORD_ARM:Rec arm TRACK_FX:Track FX MUTE:Mute SOLO:Solo QLINK:Q-Link USB_SELECT:USB select RECORD_TO_ARRANGE:Rec mode"></div>
+      <div class="keys" style="grid-template-columns: repeat(2, 1fr)" data-keys="RECORD_ARM:Rec arm TRACK_FX:Track FX MUTE:Mute SOLO:Solo QLINK:Q-Links^Learn"></div>
     </section>
     <div class="bezel"><img id="screen" src="/screen.png" width="__W__" height="__H__" alt="MPC screen. Click or touch it like the device's touchscreen." draggable="false"></div>
     <section class="wing" aria-label="Lab controls">
       <p class="group" id="meterlabel" style="color: #a6a6ae" hidden>Main out</p>
       <div class="meter" id="meter" aria-hidden="true" hidden><i><b></b></i><i><b></b></i></div>
+      <div class="analog">
+        <label><span class="knob dead" title="Analog on the real unit. It never reaches the app, so it does nothing here."></span>Gain 1</label>
+        <label><span class="knob dead" title="Analog on the real unit. It never reaches the app, so it does nothing here."></span>Gain 2</label>
+        <label><span class="knob dead" title="Analog on the real unit. It never reaches the app, so it does nothing here."></span>3/4 rec gain</label>
+        <label><button class="knob" id="mainvol" aria-label="Main volume. Drag up or down." title="Main volume: sets how loud this page plays the main out"></button>Main volume</label>
+      </div>
+      <div class="analog">
+        <label><span class="knob dead" title="Analog on the real unit. It never reaches the app, so it does nothing here."></span>Dir / main</label><span></span>
+        <div class="keys" style="grid-column: span 2; grid-template-columns: repeat(2, 1fr); align-self: end" data-keys="USB_SELECT:USB select PRE_POST:Pre / post"></div>
+      </div>
       <div id="link" role="status">control surface: waiting</div>
       <div class="util">
         <button id="sound" aria-pressed="false" title="Play the MPC's main out (1-2) on this computer">Sound off</button>
+        <button id="audioin" aria-pressed="false" title="The MPC's inputs 1-2: off, test tone, or this computer's microphone (click to cycle)">In: off</button>
         <button id="power" title="Press the device's power key">Power</button>
         <span id="status" role="status">connecting</span>
       </div>
@@ -105,26 +122,32 @@
   <div class="deck">
     <section class="block left" aria-label="Left deck">
       <div class="strip" id="strip" tabindex="0" role="slider" aria-label="Touch strip. Drag up or down." aria-valuemin="0" aria-valuemax="100" title="Touch strip: drag up or down (or arrow keys); the STRIP key picks its mode"></div>
-      <div style="display: flex; flex-direction: column; gap: 8px">
-        <p class="group">Step seq control</p>
-        <div class="keys" style="grid-template-columns: repeat(4, 1fr)" data-keys="SET:Set STEQ_SEQ_AUDITION:Audition STEP_PREV:Previous STEP_NEXT:Next"></div>
-        <p class="group">Pad bank</p>
-        <div class="keys" style="grid-template-columns: repeat(4, 1fr)" data-keys="PAD_BANK_A:A PAD_BANK_B:B PAD_BANK_C:C PAD_BANK_D:D SOUNDS:Sounds FAVOURITES:Favourites SAVE:Save BROWSER:Browse"></div>
-        <p class="group">Touch strip and sample</p>
-        <div class="keys" style="grid-template-columns: repeat(4, 1fr)" data-keys="TOUCHFX:Touch FX STRIP:Touch strip STEM:Stem CHOP:Chop MODE_SAMPLE_EDIT:Sample edit GRID:Grid edit TRACK_MUTE:Track mute PAD_MUTE:Pad mute ARRANGE:Arrange MATRIX:Matrix CHANNEL_MIXER:Mixer MODE_PROGRAM_EDIT:Track edit"></div>
-        <div class="keys" style="grid-template-columns: repeat(4, 1fr)" data-keys="FULL_LEVEL:Full level SIXTEEN_LEVEL:16 levels NEXT_SEQ:Next seq ERASE:Erase NOTE_REPEAT:Note repeat SHIFT:Shift"></div>
-        <div class="keys" style="grid-template-columns: repeat(4, 1fr)" data-keys="PAD_PERFORM:Pad perform SAMPLER:Sampler XYFX:XY FX"></div>
+      <div class="leftkeys">
+        <div>
+          <p class="group">Step seq control</p>
+          <div class="keys" style="grid-template-columns: repeat(4, 1fr)" data-keys="SET:Set^Follow STEQ_SEQ_AUDITION:Audition^Lock STEP_PREV:Previous^&lt; Nudge STEP_NEXT:Next^Nudge &gt;"></div>
+          <p class="group">Pad bank</p>
+          <div class="keys" style="grid-template-columns: repeat(4, 1fr)" data-keys="PAD_BANK_A:A^E PAD_BANK_B:B^F PAD_BANK_C:C^G PAD_BANK_D:D^H SOUNDS:Sounds FAVOURITES:Favorites SAVE:Save^Save as BROWSER:Browse^Pad assign"></div>
+          <p class="group">Touch strip and sample</p>
+          <div class="keys" style="grid-template-columns: repeat(4, 1fr)" data-keys="TOUCHFX:Touch FX^Config STRIP:Touch strip^Config STEM:Stem^Flatten CHOP:Chop^Convert"></div>
+          <div class="keys" style="grid-template-columns: repeat(4, 1fr)" data-keys="MODE_SAMPLE_EDIT:Sample edit^Sampler GRID:Grid edit^List edit TRACK_MUTE:Track mute^MIDI ctrl PAD_MUTE:Pad mute^XYFX ARRANGE:Arrange MATRIX:Matrix^Config CHANNEL_MIXER:Mixer^Pad mix MODE_PROGRAM_EDIT:Track edit^Settings"></div>
+          <p class="group">Shortcuts (shifted keys on the unit)</p>
+          <div class="keys" style="grid-template-columns: repeat(2, 1fr)" data-keys="SAMPLER:Sampler XYFX:XY FX"></div>
+        </div>
+        <div>
+          <div class="keys" style="grid-template-columns: repeat(1, 1fr)" data-keys="FULL_LEVEL:Full level SIXTEEN_LEVEL:16 levels PAD_PERFORM:Notes^Pad ctrl NEXT_SEQ:Next seq^Song SHIFT:Shift ERASE:Erase^Clear trk NOTE_REPEAT:Note repeat^Latch"></div>
+        </div>
       </div>
     </section>
     <section aria-label="Pads"><div id="pads"></div></section>
     <section class="block" aria-label="Right deck">
       <div class="two">
         <div style="display: flex; flex-direction: column; gap: 8px">
-          <div class="keys" style="grid-template-columns: repeat(4, 1fr)" data-keys="TAP_TEMPO:Tap tempo COPY:Copy UNDO:Undo MENU:Menu"></div>
-          <div class="keys" style="grid-template-columns: repeat(4, 1fr)" data-keys="NUMERIC_1:1 NUMERIC_2:2 NUMERIC_3:3 MAIN:Main NUMERIC_4:4 NUMERIC_5:5 NUMERIC_6:6 SHIFT2:Shift NUMERIC_7:7 NUMERIC_8:8 NUMERIC_9:9 DATA_MINUS:− NUMERIC_PLUS_MINUS:+/− NUMERIC_0:0 NUMERIC_ENTER:Enter DATA_PLUS:+"></div>
+          <div class="keys" style="grid-template-columns: repeat(4, 1fr)" data-keys="TAP_TEMPO:Tap tempo^Global COPY:Copy^Delete AUTOMATION:Read / write^Clear UNDO:Undo^Redo MENU:Menu^Prefs NUMERIC_1:1 NUMERIC_2:2 NUMERIC_3:3 MAIN:Main^Track view NUMERIC_4:4 NUMERIC_5:5 NUMERIC_6:6 SHIFT2:Shift NUMERIC_7:7 NUMERIC_8:8 NUMERIC_9:9 LOOP_ON:Loop on^Punch in NUMERIC_PLUS_MINUS:+/− NUMERIC_0:0 NUMERIC_ENTER:Enter RECORD_TO_ARRANGE:Arrange^Clip METRONOME:Metronome^Config TC:TC on/off^Config QUANTIZE:Quantize^All trks"></div>
         </div>
         <div style="display: grid; gap: 8px">
           <button class="wheel" id="wheel" aria-label="Data wheel. Drag up or down, or use the mouse wheel or arrow keys."></button>
+          <div class="keys" style="grid-template-columns: repeat(2, 1fr)" data-keys="DATA_MINUS:− DATA_PLUS:+"></div>
           <div class="cursor">
             <span></span><button class="k" data-key="CURSOR_UP" aria-label="Cursor up">▲</button><span></span>
             <button class="k" data-key="CURSOR_LEFT" aria-label="Cursor left">◀</button><button class="k" data-key="CURSOR_CENTRE" aria-label="Cursor centre">●</button><button class="k" data-key="CURSOR_RIGHT" aria-label="Cursor right">▶</button>
@@ -132,14 +155,13 @@
           </div>
         </div>
       </div>
-      <div class="keys" style="grid-template-columns: repeat(5, 1fr)" data-keys="METRONOME:Metro TC:TC on/off QUANTIZE:Quantize LOOP_ON:Loop on AUTOMATION:Auto"></div>
       <p class="group">Locate</p>
       <div class="keys" style="grid-template-columns: repeat(5, 1fr)" data-keys="PREV:&lt; NEXT:&gt; LOCATE:Locate BAR_PREV:≪ BAR_NEXT:≫"></div>
-      <div class="keys" style="grid-template-columns: repeat(5, 1fr)" data-keys="RECORD:● Rec|rec OVERDUB:⊕ Overdub|rec STOP:■ Stop PLAY:▶ Play|play PLAY_START:▶| Start|play"></div>
+      <div class="keys" style="grid-template-columns: repeat(5, 1fr)" data-keys="RECORD:● Rec^Recall|rec OVERDUB:⊕ Overdub|rec STOP:■ Stop^Return PLAY:▶ Play|play PLAY_START:▶| Start|play"></div>
     </section>
   </div>
 </div>
-<footer><p id="help"><kbd>Space</kbd> play / stop &nbsp; Pads: <kbd>Z X C V</kbd> = 1-4, <kbd>A S D F</kbd> = 5-8, <kbd>Q W E R</kbd> = 9-12, <kbd>1 2 3 4</kbd> = 13-16 (pad 1 bottom left, velocity 100). On screen, hit a pad near its centre for hard, near its edge for soft, then drag on it for pressure. Drag a knob faster for bigger steps.</p>Stock firmware in a virtual machine. Works: touchscreen, main out sound, pads, buttons, data wheel, Q-Link knobs (a turn counts while the knob is touched; the server adds the touch for wheel and key turns), touch strip. Pad velocity and pressure follow where on the pad you hit. Not emulated: gain knobs.</footer>
+<footer><p id="help"><kbd>Space</kbd> play / stop &nbsp; Pads: <kbd>Z X C V</kbd> = 1-4, <kbd>A S D F</kbd> = 5-8, <kbd>Q W E R</kbd> = 9-12, <kbd>1 2 3 4</kbd> = 13-16 (pad 1 bottom left, velocity 100). On screen, hit a pad near its centre for hard, near its edge for soft, then drag on it for pressure. Drag a knob faster for bigger steps.</p>Stock firmware in a virtual machine. Works: touchscreen, main out sound, pads, buttons, data wheel, Q-Link knobs (a turn counts while the knob is touched; the server adds the touch for wheel and key turns), touch strip. Pad velocity and pressure follow where on the pad you hit. The Main volume knob sets this page's playback level. Greyed knobs are analog on the real unit and never reach the app.</footer>
 <script>
 const img = document.getElementById("screen"), status = document.getElementById("status");
 const W = __W__, H = __H__;
@@ -247,18 +269,21 @@ for (const row of [3, 2, 1, 0]) for (let col = 0; col < 4; col++) {          // 
   hold(b, "PAD " + n, 100, true); padsEl.append(b);
 }
 for (const box of document.querySelectorAll(".keys")) for (const item of box.dataset.keys.split(" ").reduce((a, w) => (w.includes(":") ? a.push(w) : a[a.length - 1] += " " + w, a), [])) {
-  const [name, rest] = item.split(":"), [label, cls] = rest.split("|"), b = document.createElement("button");
-  b.className = "k" + (cls ? " " + cls : ""); b.textContent = label; b.dataset.key = name; b.title = name.replaceAll("_", " ");
+  const [name, rest] = item.split(":"), [text, cls] = rest.split("|"), [label, sub] = text.split("^"), b = document.createElement("button");
+  b.className = "k" + (cls ? " " + cls : ""); b.textContent = label;
+  if (sub) { const sm = document.createElement("small"); sm.textContent = sub; b.append(sm); } b.dataset.key = name; b.title = name.replaceAll("_", " ");
   if (name.startsWith("SHIFT")) latch(b, name); else hold(b, name, 127);
   box.append(b);
 }
 for (const b of document.querySelectorAll(".cursor .k")) hold(b, b.dataset.key, 127);
+// printed under the step buttons on the XL
+const STEP_LABELS = ["Drum seq", "Note seq", "Step edit", "Note length", "Last step", "Automation", "Clip launch", "Row launch", "Track select", "Track arm", "Track mute", "Pad mute", "Next seq", "Q-Link pad grid", "Visuals", "Edit actions"];
 for (let n = 1; n <= 16; n++) {
   const q = document.createElement("div"), knob = document.createElement("button"), step = document.createElement("button"), tag = document.createElement("span"), oled = document.createElement("canvas");
   oled.className = "oled"; oled.width = 128; oled.height = 32; oled.dataset.display = n - 1; oled.setAttribute("aria-hidden", "true"); q.append(oled);
   q.className = "q"; knob.className = "knob"; knob.setAttribute("aria-label", "Q-Link " + n); knob.title = "Q-Link " + n + ": drag up or down; faster drag = bigger steps"; turnable(knob, "QLINK " + n, `QLINK${n}_TOUCH`);
   step.className = "step"; step.dataset.key = "STEP" + n; step.setAttribute("aria-label", "Step " + n); hold(step, "STEP" + n, 127);
-  tag.textContent = n; q.append(knob, step, tag); qrow.append(q);
+  tag.textContent = STEP_LABELS[n - 1]; step.title = "Step " + n + ": " + STEP_LABELS[n - 1]; q.append(knob, step, tag); qrow.append(q);
 }
 turnable(document.getElementById("wheel"), "DATA_WHEEL");
 const trackKnob = document.getElementById("trackknob");                      // the XL's 17th knob: current track level
@@ -325,7 +350,7 @@ if (MODEL_CONTROLS) {
   document.querySelector("footer").prepend(`${MODEL_CONTROLS.name} (${MODEL_CONTROLS.model}): XL layout with the keys this product does not have hidden. `);
 }
 const meterBars = document.querySelectorAll("#meter b"), meterEl = document.getElementById("meter"), meterLabel = document.getElementById("meterlabel");
-let meterSeen = false;   // measured on 3.10.0: VU_* and MAIN_OUTPUT_METER_* never leave 0 (metronome, pad hits, mixer screen)
+let meterSeen = false;   // shown once the app sends a level (it does on pad hits and with input signal)
 async function surface() {
   try {
     const r = await fetch("/surface");
@@ -361,6 +386,9 @@ surface();
 // worker reads it and hands chunks to a worklet that plays them from a ring buffer, resampling
 // by up to 0.3% to hold ~7 ms queued (guest and sound-card clocks drift). Starts on a click
 // (browser autoplay rule); the button then suspends and resumes the context.
+// The "In" button next to it picks what the app hears on inputs 1-2 (POST /audio): off,
+// the bridge's test tone, or this computer's microphone, which a recorder worklet sends back
+// over the same WebSocket (the browser asks for permission; it needs the sound context running).
 const WORKLET = `
 class Player extends AudioWorkletProcessor {
   constructor() {
@@ -403,12 +431,27 @@ class Player extends AudioWorkletProcessor {
     return true;
   }
 }
+class Recorder extends AudioWorkletProcessor {
+  constructor() { super(); this.out = new Int16Array(512 * 2); this.n = 0; }
+  process(inputs) {
+    const inp = inputs[0];
+    if (!inp.length) return true;
+    const L = inp[0], R = inp[1] || inp[0];
+    for (let i = 0; i < L.length; i++) {
+      this.out[this.n * 2] = Math.max(-1, Math.min(1, L[i])) * 32767;
+      this.out[this.n * 2 + 1] = Math.max(-1, Math.min(1, R[i])) * 32767;
+      if (++this.n === 512) { this.port.postMessage(this.out.slice().buffer); this.n = 0; }
+    }
+    return true;
+  }
+}
 registerProcessor("mpclab-player", Player);
+registerProcessor("mpclab-recorder", Recorder);
 `;
 const AUDIO_WORKER = `
-let out = null, rest = new Uint8Array(0);
+let out = null, ws = null, rest = new Uint8Array(0);
 function connect(url) {
-  const ws = new WebSocket(url);   // QEMU's chardev for the bridge's "mpclab.pcm" port
+  ws = new WebSocket(url);   // QEMU's chardev for the bridge's "mpclab.pcm" port
   ws.binaryType = "arraybuffer";
   ws.onmessage = m => {
     if (typeof m.data === "string") return;
@@ -418,24 +461,30 @@ function connect(url) {
     rest = b.slice(n);
     if (n) { const c = b.slice(0, n).buffer; out.postMessage(c, [c]); }
   };
-  ws.onclose = () => setTimeout(() => connect(url), 1000);
+  ws.onclose = () => { ws = null; setTimeout(() => connect(url), 1000); };
 }
-onmessage = e => { out = e.data.port; connect(e.data.url); };
+onmessage = e => {
+  if (e.data instanceof ArrayBuffer) { if (ws && ws.readyState === 1) ws.send(e.data); return; }   // microphone
+  out = e.data.port; connect(e.data.url);
+};
 `;
-const soundBtn = document.getElementById("sound");
-let actx = null;
+const soundBtn = document.getElementById("sound"), inBtn = document.getElementById("audioin");
+let actx = null, audioWorker = null, mic = null, micWanted = false, inState = "off";
+async function startAudio() {
+  actx = new AudioContext({ sampleRate: 44100, latencyHint: 0 });
+  await actx.audioWorklet.addModule(URL.createObjectURL(new Blob([WORKLET], { type: "text/javascript" })));
+  const player = new AudioWorkletNode(actx, "mpclab-player", { numberOfInputs: 0, outputChannelCount: [2] });
+  volNode = actx.createGain(); volNode.gain.value = vol; player.connect(volNode).connect(actx.destination);
+  const ch = new MessageChannel();
+  player.port.postMessage({ port: ch.port1 }, [ch.port1]);
+  audioWorker = new Worker(URL.createObjectURL(new Blob([AUDIO_WORKER], { type: "text/javascript" })));
+  audioWorker.postMessage({ port: ch.port2, url: `ws://${location.hostname}:__PCM__` }, [ch.port2]);
+  actx.onstatechange = showSound;
+  syncMic(micWanted);
+}
 async function toggleSound() {
-  if (!actx) {
-    actx = new AudioContext({ sampleRate: 44100, latencyHint: 0 });
-    await actx.audioWorklet.addModule(URL.createObjectURL(new Blob([WORKLET], { type: "text/javascript" })));
-    const player = new AudioWorkletNode(actx, "mpclab-player", { numberOfInputs: 0, outputChannelCount: [2] });
-    player.connect(actx.destination);
-    const ch = new MessageChannel();
-    player.port.postMessage({ port: ch.port1 }, [ch.port1]);
-    const worker = new Worker(URL.createObjectURL(new Blob([AUDIO_WORKER], { type: "text/javascript" })));
-    worker.postMessage({ port: ch.port2, url: `ws://${location.hostname}:__PCM__` }, [ch.port2]);
-    actx.onstatechange = showSound;
-  } else if (actx.state === "running") await actx.suspend();
+  if (!actx) await startAudio();
+  else if (actx.state === "running") await actx.suspend();
   else await actx.resume();
   showSound();
 }
@@ -444,6 +493,54 @@ function showSound() {
   soundBtn.textContent = on ? "Sound on" : "Sound off"; soundBtn.setAttribute("aria-pressed", on);
 }
 soundBtn.addEventListener("click", toggleSound);
+// Main volume knob: page playback level only (the real knob is analog, after the app).
+let vol = 1, volNode = null;
+const volKnob = document.getElementById("mainvol");
+function setVol(v) { vol = Math.min(1, Math.max(0, v)); volKnob.style.setProperty("--turn", (vol * 270 - 135) + "deg"); if (volNode) volNode.gain.value = vol; }
+volKnob.addEventListener("pointerdown", e => { e.preventDefault(); volKnob.setPointerCapture(e.pointerId); });
+volKnob.addEventListener("pointermove", e => { if (volKnob.hasPointerCapture(e.pointerId)) setVol(vol - e.movementY / 150); });
+volKnob.addEventListener("keydown", e => { if (e.key === "ArrowUp") setVol(vol + .05); if (e.key === "ArrowDown") setVol(vol - .05); });
+setVol(1);
+async function syncMic(want) {   // input "mic": this computer's microphone -> the bridge -> app inputs 1-2
+  micWanted = want;
+  if (!actx || want === !!mic) return;
+  if (!want) { if (mic.stream) { mic.stream.getTracks().forEach(t => t.stop()); mic.node.disconnect(); } mic = null; return; }
+  mic = { pending: true };
+  try {
+    const stream = await navigator.mediaDevices.getUserMedia({ audio: { echoCancellation: false, noiseSuppression: false, autoGainControl: false } });
+    if (!micWanted) { stream.getTracks().forEach(t => t.stop()); mic = null; return; }   // switched away meanwhile
+    const node = new AudioWorkletNode(actx, "mpclab-recorder");
+    node.port.onmessage = e => audioWorker && audioWorker.postMessage(e.data, [e.data]);
+    actx.createMediaStreamSource(stream).connect(node);
+    mic = { stream, node };
+  } catch (e) { mic = null; inBtn.title = "No microphone access: " + e.message; }
+  showIn();
+}
+function showIn(levels) {
+  const db = levels && levels.in ? Math.max(...levels.in) : 0;
+  const lv = db > 0 ? ` ${Math.round(20 * Math.log10(db))} dB` : "";
+  const wait = inState === "mic" && !(mic && mic.stream) ? (!actx ? " (click Sound)" : mic && mic.pending ? " (asking)" : " (no access)") : "";
+  inBtn.textContent = "In: " + inState + (wait || lv);
+  inBtn.setAttribute("aria-pressed", inState !== "off");
+}
+inBtn.addEventListener("click", async () => {
+  const next = { off: "tone", tone: "mic", mic: "off" }[inState];
+  if (next === "mic") { if (!actx) await startAudio(); else if (actx.state !== "running") await actx.resume(); showSound(); }
+  try { await fetch("/audio", { method: "POST", body: JSON.stringify({ in: next }) }); } catch {}
+  pollIn();
+});
+let inTimer = null;
+async function pollIn() {   // GET /audio: the input source (the API may change it) and the bridge's input peaks
+  clearTimeout(inTimer);
+  try {
+    const a = await (await fetch("/audio")).json();
+    inState = a.in;
+    syncMic(inState === "mic");
+    showIn(a.levels);
+  } catch { inBtn.textContent = "In: ?"; }
+  inTimer = setTimeout(pollIn, 500);
+}
+pollIn();
 </script>
 </body>
 </html>

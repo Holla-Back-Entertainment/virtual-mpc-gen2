@@ -74,3 +74,10 @@ Wrong labels: none found; "Auto" is the AUTOMATION key (full name in its tooltip
 
 Meter: `VU_*` and `MAIN_OUTPUT_METER_*` stayed at 0 on 3.10.0 while the metronome ran, pads sounded and the mixer
 screen was open, so the page hides the main-out meter and shows it only if a non-zero level ever arrives.
+
+## Layout pass against the product photo (13 Nov 2026, late)
+Added: right wing (Gain 1, Gain 2, 3/4 rec gain, Dir/main as greyed analog knobs; Main volume = page playback level;
+USB select and Pre/post keys moved there). Relabelled to the print: AUTOMATION = "Read / write", PAD_PERFORM = "Notes",
+RECORD_TO_ARRANGE = "Arrange / Clip" (under Loop on). Red shifted labels and the 16 step labels are copied from the photo
+and are labels only: Shift + key was not tested per key. Not drawn: the Rear/Front, +48V and Stereo/Mono switches, the
+wing meters. Two shifted labels were unreadable in the photo and left off (Full level, 16 levels, left Arrange).

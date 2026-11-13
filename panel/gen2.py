@@ -18,6 +18,10 @@ GET  /surface     surface handshake state, last LED / pad-colour state, recent M
                   "displays" (Q-Link OLEDs, decoded) and "lights" (RGB lights and meters by name)
 GET  /display/N.png  Q-Link display buffer N (0..16) as a PNG, ?scale=1..8 (default 4); 404 = not drawn yet
 POST /resync      make the app resend every light and display (status 2 on its next ping, <= 4 s)
+GET  /audio       {"in", "gain", "tone_hz", "bridge": linked, "levels": {"out": [peak per app output
+                  channel], "in": [l, r], "drop", "under"}, "levels_age": s} (peaks over ~100 ms, 0..1)
+POST /audio       {"in": "off"|"tone"|"mic", "gain": 0..100, "tone_hz": Hz} the app's inputs 1-2
+                  (any subset of keys); "mic" = the page's microphone (the page asks for it)
 Sound does not pass here: the page plays the bridge's PCM straight from QEMU's WebSocket
 chardev "mpclab.pcm" (PORTS["pcm"]), as the Sample page does.
 
@@ -92,6 +96,97 @@ def display_request(path):
     return int(route[9:-4]), scale
 
 
+class Audio:
+    """The app's audio inputs 1-2 and the bridge's levels, over the virtio-serial port
+    "mpclab.audio" (QEMU TCP chardev PORTS["audio"]) to mpclab-audio-bridge in the VM, as the
+    Sample panel's Rear class does. Sends "routing ..." lines, receives "levels ..." ~10x/s.
+    in: "off" (silence), "tone" (sine from the bridge), "mic" (the page's microphone, which the
+    page streams to the bridge over its PCM WebSocket; nothing arrives unless a page has it)."""
+    SOURCES = {"off": "silence", "tone": "tone", "mic": "host"}
+
+    def __init__(self):
+        self.lock = threading.Lock()
+        self.state = {"in": "off", "gain": 50, "tone_hz": 440}
+        self.sock, self.buf = None, b""
+        self.lv, self.lv_time = {}, None
+
+    def loop(self):
+        import socket
+        while True:
+            try:
+                s = socket.create_connection((HOST, PORTS["audio"]))
+                with self.lock:
+                    self.sock, self.buf = s, b""
+                self.send()
+                while chunk := s.recv(4096):
+                    self.feed(chunk)
+            except OSError:
+                pass
+            with self.lock:
+                self.sock = None
+            time.sleep(1)
+
+    def feed(self, chunk):
+        self.buf += chunk
+        *lines, self.buf = self.buf.split(b"\n")
+        for ln in lines:
+            lv = parse_levels(ln.decode(errors="replace"))
+            if lv:
+                with self.lock:
+                    self.lv, self.lv_time = lv, time.time()
+
+    def set(self, body):
+        with self.lock:
+            st = dict(self.state)
+        if "in" in body:
+            if body["in"] not in self.SOURCES:
+                raise ValueError(f"in: one of {', '.join(self.SOURCES)}")
+            st["in"] = body["in"]
+        if "gain" in body:
+            st["gain"] = max(0, min(100, int(body["gain"])))
+        if "tone_hz" in body:
+            st["tone_hz"] = max(20, min(20000, float(body["tone_hz"])))
+        with self.lock:
+            self.state = st
+        self.send()
+
+    def send(self):
+        with self.lock:
+            line, s = routing_line(self.state), self.sock
+        if s is not None:
+            try:
+                s.sendall(line.encode())
+            except OSError:
+                pass
+
+    def snapshot(self):
+        with self.lock:
+            age = None if self.lv_time is None else round(time.time() - self.lv_time, 2)
+            return dict(self.state, bridge=self.sock is not None and age is not None and age < 2, levels=self.lv, levels_age=age)
+
+
+def routing_line(st):
+    """Audio state -> the bridge's routing line (out stays on: main out 1-2 to the host)."""
+    return f"routing out=on pair=0 in={Audio.SOURCES[st['in']]} gain={st['gain']} tone_hz={st['tone_hz']:g}\n"
+
+
+def parse_levels(line):
+    """"levels out <peak per channel> in <l> <r> drop <n> under <n>" -> dict, or None."""
+    w = line.split()
+    if w[:2] != ["levels", "out"] or "in" not in w:
+        return None
+    i = w.index("in")
+    try:
+        lv = {"out": [float(x) for x in w[2:i]], "in": [float(x) for x in w[i + 1:i + 3]]}
+        lv.update({k: int(v) for k, v in zip(w[i + 3::2], w[i + 4::2])})
+    except ValueError:
+        return None
+    return lv
+
+
+AUDIO = None                     # Audio, started in __main__
+
+
 def screen():
     os.makedirs(RUN, exist_ok=True)
     call("screendump", filename=PNG, format="png")
@@ -125,6 +220,8 @@ class Handler(BaseHTTPRequestHandler):
                 if self.path.endswith("v=" + v):
                     return self.reply(304)
                 return self.reply(200, png, "image/png", **{"X-Frame": v})
+            if self.path == "/audio" and AUDIO:
+                return self.reply(200, json.dumps(AUDIO.snapshot()).encode(), "application/json")
             if self.path == "/surface" and SURFACE:
                 return self.reply(200, json.dumps(SURFACE.snapshot()).encode(), "application/json")
             n, scale = display_request(self.path)
@@ -142,6 +239,9 @@ class Handler(BaseHTTPRequestHandler):
                 touch(body["type"], body.get("x", 0), body.get("y", 0))
             elif self.path == "/resync" and SURFACE:
                 SURFACE.request_resync()
+            elif self.path == "/audio" and AUDIO:
+                AUDIO.set(body)
+                return self.reply(200, json.dumps(AUDIO.snapshot()).encode(), "application/json")
             elif self.path == "/power":
                 call("system_powerdown")
             elif self.path == "/control" and SURFACE and body.get("action") in ("press", "release", "turn", "move", "pressure"):
@@ -167,6 +267,18 @@ def selftest():
     assert display_request("/display/x.png") == (None, None) and display_request("/surface") == (None, None)
     c = json.loads(page_controls("acvg"))
     assert c["model"] == "ACVG" and c["qlinks"] == 4 and "PLAY" in c["buttons"] and "NUMERIC_1" not in c["buttons"]
+    assert routing_line({"in": "mic", "gain": 50, "tone_hz": 440.0}) == "routing out=on pair=0 in=host gain=50 tone_hz=440\n"
+    lv = parse_levels("levels out 0.5000 0.2500 in 0.2500 0.2500 drop 3 under 0")
+    assert lv == {"out": [0.5, 0.25], "in": [0.25, 0.25], "drop": 3, "under": 0}
+    assert parse_levels("bridge: hello") is None
+    a = Audio()
+    a.set({"in": "tone", "gain": 300})
+    assert a.snapshot()["in"] == "tone" and a.snapshot()["gain"] == 100 and a.snapshot()["bridge"] is False
+    try:
+        a.set({"in": "line"})
+        raise AssertionError("bad source accepted")
+    except ValueError:
+        pass
     print("gen2 panel selftest ok")
     surface.selftest()
 
@@ -177,4 +289,6 @@ if __name__ == "__main__":
     else:
         print(f"gen2 panel: {MODELS[MODEL]['model']} at http://{HOST}:{PORTS['panel']}/")
         SURFACE = surface.Surface(HOST, PORTS["cs"], MODEL, store=os.path.join(RUN, "gen2-displays.json"))
+        AUDIO = Audio()
+        threading.Thread(target=AUDIO.loop, daemon=True).start()
         ThreadingHTTPServer((HOST, PORTS["panel"]), Handler).serve_forever()

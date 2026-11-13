@@ -1,0 +1,19 @@
+# Lab only: partitions and formats the lab's blank NVMe once, before the stock mounts use it.
+# On the device the drive leaves the factory prepared; no stock unit partitions it
+# (acvg-nvme-update only unpacks content onto /synths, az0x-format-drive makes one exFAT
+# partition, which would leave nvme.mount without part2). Does nothing once part1 exists.
+[Unit]
+Description=MPC lab: prepare blank internal NVMe
+DefaultDependencies=no
+ConditionPathExists=/sys/firmware/devicetree/base/chosen/inmusic,nvme-fitted
+Requires=dev-disk-by\x2dpath-platform\x2da40000000.pcie\x2dpci\x2d0000:01:00.0\x2dnvme\x2d1.device
+After=dev-disk-by\x2dpath-platform\x2da40000000.pcie\x2dpci\x2d0000:01:00.0\x2dnvme\x2d1.device
+Before=nvme.mount synths.mount acvg-nvme-update.service local-fs.target
+
+[Service]
+Type=oneshot
+RemainAfterExit=yes
+ExecStart=/opt/mpclab/bin/mpclab-nvme-prepare
+
+[Install]
+WantedBy=local-fs.target

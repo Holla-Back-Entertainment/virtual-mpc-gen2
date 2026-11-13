@@ -15,7 +15,7 @@
   .unit { width: min(100%, 1180px); background: var(--black); border: 1px solid #26262b; border-radius: 14px; overflow: hidden; }
   button, summary { font: inherit; color: inherit; cursor: pointer; touch-action: none; user-select: none; -webkit-user-select: none; }
   summary { touch-action: auto; }
-  button:focus-visible, summary:focus-visible { outline: 2px solid var(--focus); outline-offset: 2px; }
+  button:focus-visible, summary:focus-visible, .strip:focus-visible { outline: 2px solid #fff; outline-offset: 1px; box-shadow: 0 0 0 4px #1a3fa0; position: relative; z-index: 2; }
 
   .bar { display: flex; flex-wrap: wrap; align-items: center; gap: 12px 18px; padding: 10px 14px; background: var(--wing); border-bottom: 1px solid #232327; }
   .brand { font-size: 20px; font-weight: 300; letter-spacing: .12em; margin: 0; line-height: 1.1; }
@@ -42,10 +42,19 @@
   .k.rec::after { background: #5a1420; } .k.rec[data-led="2"]::after, .k.rec[data-led="3"]::after { background: var(--red); box-shadow: 0 0 6px var(--red); }
   .k.play[data-led="2"]::after, .k.play[data-led="3"]::after { background: #3ddc84; box-shadow: 0 0 6px #3ddc84; }
   .k.big { min-height: 42px; }
+  .k[data-step]::after { background: var(--sc, #2c2c31); box-shadow: 0 0 5px var(--sc, transparent); height: 3px; }
+  .bankrow { display: flex; align-items: center; gap: 6px; margin-top: 6px; font-size: 11px; color: var(--dim); }
+  .bankrow b { width: 14px; height: 14px; border-radius: 50%; background: #2c2c31; border: 1px solid #000; display: block; }
+  .bankrow b[data-led="1"], .bankrow b[data-led="2"] { background: #7a4a1a; }
+  .bankrow b[data-led="3"], .bankrow b[data-led="4"], .bankrow b[data-led="5"], .bankrow b[data-led="6"], .bankrow b[data-led="7"] { background: var(--amber); box-shadow: 0 0 6px var(--amber); }
+  #help { margin: 0 0 6px; line-height: 1.6; }
+  kbd { font: 11px/1 ui-monospace, monospace; background: #1d1d22; border: 1px solid #3a3a42; border-radius: 3px; padding: 1px 4px; color: var(--ink); }
 
   .rows { padding: 10px 12px 0; display: grid; gap: 8px; }
   .rowA { display: grid; grid-template-columns: 54px minmax(0, 1fr) 150px; gap: 12px; align-items: end; }
   .rowB { display: grid; grid-template-columns: minmax(0, 1fr) minmax(0, 1fr) 150px; gap: 12px; align-items: end; }
+  .mainvol { display: flex; flex-direction: column; align-items: center; gap: 2px; font-size: 11px; color: var(--dim); text-transform: uppercase; }
+  .mainvol .knob { width: 40px; }
   .group { font-size: 11px; letter-spacing: .08em; text-transform: uppercase; color: var(--dim); margin: 0 0 4px; }
 
   .main { display: grid; grid-template-columns: 56px minmax(0, 1fr) minmax(0, 1.15fr) 150px; gap: 12px; padding: 10px 12px 12px; align-items: start; }
@@ -54,7 +63,6 @@
   .strip::before { content: ""; position: absolute; left: 3px; right: 3px; bottom: var(--lo, 0%); height: var(--len, 0%); background: var(--amber); opacity: .55; border-radius: 2px; }
   .strip::after { content: "touch strip"; position: absolute; inset: 0; display: grid; place-items: center; color: var(--dim); font-size: 11px; writing-mode: vertical-rl; }
   .strip.hit { outline: 2px solid var(--focus); }
-  .strip:focus-visible { outline: 2px solid var(--focus); outline-offset: 2px; }
   .padwrap { align-self: stretch; }
   #pads { display: grid; grid-template-columns: repeat(4, 1fr); gap: 8px; background: #101012; padding: 10px; border-radius: 8px; border: 2px solid #050506; }
   #pads button { aspect-ratio: 1; background: #1b1b1e; border: 3px solid var(--ring, #2c2c31); border-radius: 6px; padding: 4px; font-size: 11px; color: var(--dim); text-align: left; display: flex; align-items: flex-start; box-shadow: inset 0 0 14px #000; }
@@ -78,6 +86,8 @@
   footer { font-size: 12px; color: var(--dim); max-width: 1180px; text-align: center; }
   @media (max-width: 900px) {
     .rowA, .rowB, .main { grid-template-columns: 1fr; }
+    .keys[style] { grid-template-columns: repeat(auto-fill, minmax(76px, 1fr)) !important; }
+    .rowA > *, .rowB > *, .main > * { min-width: 0; }
     .stripcol { flex-direction: row; } .strip { min-height: 44px; height: 44px; } .strip::after { writing-mode: horizontal-tb; }
     .qcol { flex-direction: row; justify-content: space-around; }
     .center { order: -1; }
@@ -88,12 +98,14 @@
 <body>
 <div class="unit">
   <div class="bar">
+    <label class="mainvol"><button class="knob" id="mainvol" aria-label="Main volume. Drag up or down, or arrow keys." title="Main volume: sets how loud this page plays the main out (analog on the unit)"></button>Main volume</label>
     <h1 class="brand"><small>VIRTUAL</small>__MODEL_SHORT__</h1>
     <span class="grow"></span>
     <div id="link" role="status">control surface: waiting</div>
-    <div class="meter" id="meter" aria-label="Main out level" role="img"><i><b></b></i><i><b></b></i></div>
+    <div class="meter" id="meter" aria-label="Main out level" role="img" hidden><i><b></b></i><i><b></b></i></div>
     <div class="util">
       <button id="sound" aria-pressed="false" title="Play the MPC's main out (1-2) on this computer">Sound off</button>
+      <button id="audioin" aria-pressed="false" title="The MPC's inputs 1-2: off, test tone, or this computer's microphone (click to cycle)">In: off</button>
       <button id="power" title="Press the device's power key">Power</button>
       <span id="status" role="status">connecting</span>
     </div>
@@ -101,14 +113,15 @@
 
   <div class="rows">
     <div class="rowA">
-      <div><p class="group">Set</p><div class="keys" style="grid-template-columns: 1fr" data-keys="SET|Set"></div></div>
-      <div><p class="group">Step buttons</p><div class="keys" style="grid-template-columns: repeat(16, minmax(0, 1fr))" data-keys="STEP1|1|Drum seq;STEP2|2|Note seq;STEP3|3|Step edit;STEP4|4|Note len;STEP5|5|Last step;STEP6|6|Autom.;STEP7|7|Clip lnch;STEP8|8|Row lnch;STEP9|9|Trk select;STEP10|10|Trk arm;STEP11|11|Trk mute;STEP12|12|Pad mute;STEP13|13|Next seq;STEP14|14|Q-Link pad;STEP15|15|Visual;STEP16|16|Edit act"></div></div>
-      <div><p class="group">Follow / lock</p><div class="keys" style="grid-template-columns: 1fr 1fr" data-keys="PREV|Prev|Follow;NEXT|Next|Lock"></div></div>
+      <div><p class="group">&nbsp;</p><div class="keys" style="grid-template-columns: 1fr" data-keys="SET|Set"></div></div>
+      <div><p class="group">&nbsp;</p><div class="keys" style="grid-template-columns: repeat(16, minmax(0, 1fr))" data-keys="STEP1|1|Drum seq;STEP2|2|Note seq;STEP3|3|Step edit;STEP4|4|Note length;STEP5|5|Last step;STEP6|6|Auto­mation;STEP7|7|Clip launch;STEP8|8|Row launch;STEP9|9|Track select;STEP10|10|Track arm;STEP11|11|Track mute;STEP12|12|Pad mute;STEP13|13|Next seq;STEP14|14|Q-Link pad grid;STEP15|15|Visuals;STEP16|16|Edit actions"></div></div>
+      <div><p class="group">Now</p><div class="keys" style="grid-template-columns: 1fr 1fr" data-keys="PREV|Prev|Follow;NEXT|Next|Lock"></div></div>
     </div>
     <div class="rowB">
-      <div><p class="group">Levels, erase, pad bank</p><div class="keys" style="grid-template-columns: repeat(8, minmax(0, 1fr))" data-keys="NOTE_REPEAT|Note repeat|Latch;FULL_LEVEL|Full level|User lvl;SIXTEEN_LEVEL|16 level|Keygrp;ERASE|Erase|Clear trk;PAD_BANK_A|A/E;PAD_BANK_B|B/F;PAD_BANK_C|C/G;PAD_BANK_D|D/H"></div></div>
-      <div><p class="group">Edit, project</p><div class="keys" style="grid-template-columns: repeat(8, minmax(0, 1fr))" data-keys="COPY|Copy|Delete;NEXT_SEQ|Notes|Next seq;TC|TC|On/off;UNDO|Undo|Redo;BROWSER|Load|Proj.;SAVE|Save|Save as;MODE_SAMPLE_EDIT|Sample edit|Smplr;TRACK_MUTE|Track mute|Pad mute"></div></div>
-      <div><p class="group">Q-Link</p><div class="keys" style="grid-template-columns: 1fr" data-keys="QLINK_BANK|Q-Link"></div></div>
+      <div><p class="group">&nbsp;</p><div class="keys" style="grid-template-columns: repeat(8, minmax(0, 1fr))" data-keys="NOTE_REPEAT|Note repeat|Latch;FULL_LEVEL|Full level|User level;SIXTEEN_LEVEL|16 levels|To keygrp;ERASE|Erase|Clear trk;PAD_BANK_A|A/E;PAD_BANK_B|B/F;PAD_BANK_C|C/G;PAD_BANK_D|D/H"></div></div>
+      <div><p class="group">&nbsp;</p><div class="keys" style="grid-template-columns: repeat(8, minmax(0, 1fr))" data-keys="COPY|Copy|Delete;PAD_PERFORM|Notes|Next seq;TC|TC|On/off;UNDO|Undo|Redo;BROWSER|Load|Project;SAVE|Save|Save as;MODE_SAMPLE_EDIT|Sample edit|Sampler;TRACK_MUTE|Track mute|Pad mute"></div></div>
+      <div><p class="group">&nbsp;</p><div class="keys" style="grid-template-columns: 1fr" data-keys="QLINK_BANK|Q-Link"></div>
+        <div class="bankrow" id="bankrow" role="status" aria-label="Q-Link bank">Bank <b data-bank="1"></b><b data-bank="2"></b><b data-bank="3"></b><b data-bank="4"></b><span id="banknum"></span></div></div>
     </div>
   </div>
 
@@ -120,8 +133,8 @@
     <section class="padwrap" aria-label="Pads"><div id="pads"></div></section>
     <div class="center">
       <div class="bezel"><img id="screen" src="/screen.png" width="__W__" height="__H__" alt="MPC screen. Click or touch it like the device's touchscreen." draggable="false"></div>
-      <div class="keys" style="grid-template-columns: repeat(7, minmax(0, 1fr))" data-keys="MENU|Menu;MAIN|Main|Trk view;SHIFT|Shift;SOUNDS|Sounds|Favs;MODE_SEQUENCE_EDIT|Edit|Grid;ARRANGE|Arrange|Matrix;CHANNEL_MIXER|Mixer|Input"></div>
-      <div class="keys" style="grid-template-columns: repeat(7, minmax(0, 1fr))" data-keys="TAP_TEMPO|Tap tempo|Glb/seq;LOOP_ON|Loop on;STEP_PREV|&lt;;STEP_NEXT|&gt;;LOCATE|Locate;BAR_PREV|&lt;&lt;;BAR_NEXT|&gt;&gt;"></div>
+      <div class="keys" style="grid-template-columns: repeat(7, minmax(0, 1fr))" data-keys="MENU|Menu;MAIN|Main|Track view;SHIFT|Shift;SOUNDS|Sounds|Favorites;MODE_PROGRAM_EDIT|Edit|Grid;ARRANGE|Arrange|Matrix;CHANNEL_MIXER|Mixer|Input"></div>
+      <div class="keys" style="grid-template-columns: repeat(7, minmax(0, 1fr))" data-keys="TAP_TEMPO|Tap tempo;LOOP_ON|Loop on;STEP_PREV|&lt;;STEP_NEXT|&gt;;LOCATE|Locate;BAR_PREV|&lt;&lt;;BAR_NEXT|&gt;&gt;"></div>
       <div class="keys" style="grid-template-columns: repeat(7, minmax(0, 1fr))" data-keys="MIC_SPEAKER|Mic on;RECORD_TO_ARRANGE|Rec to arrange;RECORD|Record|Recall|rec;OVERDUB|Over dub||rec;STOP|Stop|Return;PLAY|Play||play;PLAY_START|Play start|Click|play"></div>
     </div>
     <div class="right">
@@ -134,11 +147,11 @@
   </div>
   <div class="grill" aria-hidden="true"></div>
   <details class="more" id="more">
-    <summary id="moreSum">More keys</summary>
+    <summary id="moreSum">Hidden controls</summary>
     <div class="keys" id="moreKeys"></div>
   </details>
 </div>
-<footer>Stock firmware in a virtual machine. Works: touchscreen, main out sound, pads, buttons, data dial, Q-Link knobs (a turn counts while the knob is touched; the server adds the touch for dial and key turns), touch strip. Pad pressure: API only. Not emulated: main volume and gain knobs. Layout follows an unofficial community schematic of the Live III top panel; key placement of a few names is a guess.</footer>
+<footer><p id="help"><kbd>Space</kbd> play / stop &nbsp; Pads: <kbd>Z X C V</kbd> = 1-4, <kbd>A S D F</kbd> = 5-8, <kbd>Q W E R</kbd> = 9-12, <kbd>1 2 3 4</kbd> = 13-16 (pad 1 bottom left, velocity 100). On screen, hit a pad near its centre for hard, near its edge for soft, then drag on it for pressure. Drag a knob or the dial faster for bigger steps. Arrow keys work on a focused knob, dial or the strip.</p>Stock firmware in a virtual machine. Works: touchscreen, main out sound, pads, buttons, data dial, Q-Link knobs (a turn counts while the knob is touched; the server adds the touch for dial and key turns), touch strip. Pad velocity and pressure follow where on the pad you hit. The Main volume knob sets this page's playback level (on the unit it is analog and never reaches the app). Layout and printed labels follow Akai's top-down product photo; which control name sits behind each printed label was checked against the running app (see panel/LIVE3-KEYS.md), and the keys marked as guesses there only match by name.</footer>
 <script>
 const img = document.getElementById("screen"), status = document.getElementById("status");
 const W = __W__, H = __H__;
@@ -146,6 +159,14 @@ let frame = "", down = false, lastMove = 0;
 
 function say(text, bad) { status.textContent = text; status.className = bad ? "bad" : ""; }
 
+// Control messages go out one at a time, in order (a Q-Link touch must land before its turns).
+// Lossy ones (pressure, strip moves) are dropped when the queue is backed up.
+let chain = Promise.resolve(), queued = 0;
+function ctl(body, lossy) {
+  if (lossy && queued > 2) return;
+  queued++;
+  chain = chain.then(() => post("/control", body)).finally(() => queued--);
+}
 async function post(path, body) {
   try {
     const r = await fetch(path, { method: "POST", body: JSON.stringify(body || {}) });
@@ -186,33 +207,58 @@ poll();
 // USB panel); GET /surface gives back the pad colours, button LEDs and meters the app sets.
 
 const padsEl = document.getElementById("pads"), linkEl = document.getElementById("link"), qcol = document.getElementById("qcol");
-function hold(btn, name, value) {                       // press while held, release on lift
-  const press = () => { btn.classList.add("hit"); post("/control", { name, action: "press", value }); };
-  const up = () => { if (btn.classList.contains("hit")) { btn.classList.remove("hit"); post("/control", { name, action: "release" }); } };
-  btn.addEventListener("pointerdown", e => { e.preventDefault(); btn.setPointerCapture(e.pointerId); press(); });
+// Pad hit: where you hit sets velocity (centre = 127, edge = 20); while held, moving over the pad sends pressure the same way.
+const padHit = (btn, e) => {
+  const r = btn.getBoundingClientRect();
+  const dx = Math.abs(e.clientX - (r.left + r.width / 2)) / (r.width / 2), dy = Math.abs(e.clientY - (r.top + r.height / 2)) / (r.height / 2);
+  return Math.round(127 - Math.min(1, Math.max(dx, dy)) * 107);
+};
+function hold(btn, name, value, pad) {                  // press while held, release on lift
+  let lastP = -1;
+  const press = v => { btn.classList.add("hit"); ctl({ name, action: "press", value: v ?? value }); };
+  const up = () => { if (btn.classList.contains("hit")) { btn.classList.remove("hit"); lastP = -1; ctl({ name, action: "release" }); } };
+  btn.addEventListener("pointerdown", e => { e.preventDefault(); btn.setPointerCapture(e.pointerId); press(pad ? (lastP = padHit(btn, e)) : undefined); });
+  if (pad) btn.addEventListener("pointermove", e => {
+    if (!btn.classList.contains("hit") || e.buttons === 0 && e.pointerType === "mouse") return;
+    const v = padHit(btn, e);
+    if (Math.abs(v - lastP) >= 4) { lastP = v; ctl({ name, action: "pressure", value: v }, true); }
+  });
+  btn._hold = { press, up };
   btn.addEventListener("pointerup", up); btn.addEventListener("pointercancel", up);
   btn.addEventListener("keydown", e => { if ((e.key === " " || e.key === "Enter") && !e.repeat) press(); });
   btn.addEventListener("keyup", e => { if (e.key === " " || e.key === "Enter") up(); });
 }
 function latch(btn, name) {                             // Shift latches: a mouse has one finger
   btn.setAttribute("aria-pressed", "false");
-  btn.addEventListener("click", () => { const on = btn.classList.toggle("held"); btn.setAttribute("aria-pressed", on); post("/control", { name, action: on ? "press" : "release" }); });
+  btn.addEventListener("click", () => { const on = btn.classList.toggle("held"); btn.setAttribute("aria-pressed", on); ctl({ name, action: on ? "press" : "release" }); });
 }
-function turnable(el, name, touchName) {                // drag up/down, mouse wheel or arrow keys = clicks
-  let y = null, angle = 0;
-  const turn = n => { if (!n) return; angle += n * 12; el.style.setProperty("--turn", angle + "deg"); post("/control", { name, action: "turn", value: n }); };
-  el.addEventListener("pointerdown", e => { e.preventDefault(); el.setPointerCapture(e.pointerId); y = e.clientY; if (touchName) post("/control", { name: touchName, action: "press" }); });
-  el.addEventListener("pointermove", e => { if (y === null) return; const n = Math.trunc((y - e.clientY) / 8); if (n) { y -= n * 8; turn(n); } });
-  const up = () => { if (y !== null) { y = null; if (touchName) post("/control", { name: touchName, action: "release" }); } };
+// Knobs and dial: drag up/down, mouse wheel or arrow keys = clicks. Slow drag = 1 click per 3 px,
+// fast drag multiplies it (up to x8), so a flick sweeps a range and a nudge still registers.
+function turnable(el, name, touchName) {
+  let y = null, acc = 0, angle = 0, t0 = 0;
+  const turn = n => { if (!n) return; angle += n * 12; el.style.setProperty("--turn", angle + "deg"); ctl({ name, action: "turn", value: Math.max(-63, Math.min(63, n)) }); };
+  el.addEventListener("pointerdown", e => { e.preventDefault(); el.setPointerCapture(e.pointerId); y = e.clientY; acc = 0; t0 = performance.now(); if (touchName) ctl({ name: touchName, action: "press" }); });
+  el.addEventListener("pointermove", e => {
+    if (y === null) return;
+    const now = performance.now(), dy = y - e.clientY, speed = Math.abs(dy) / Math.max(1, now - t0);   // px per ms
+    y = e.clientY; t0 = now;
+    acc += dy * (1 + Math.min(7, speed * 2));                // fast drags count for more
+    const n = Math.trunc(acc / 3);
+    if (n) { acc -= n * 3; turn(n); }
+  });
+  const up = () => { if (y !== null) { y = null; if (touchName) ctl({ name: touchName, action: "release" }); } };
   el.addEventListener("pointerup", up); el.addEventListener("pointercancel", up);
   el.addEventListener("wheel", e => { e.preventDefault(); turn(e.deltaY < 0 ? 1 : -1); }, { passive: false });
-  el.addEventListener("keydown", e => { if (e.key === "ArrowUp" || e.key === "ArrowRight") turn(1); if (e.key === "ArrowDown" || e.key === "ArrowLeft") turn(-1); });
+  el.addEventListener("keydown", e => { if (e.key === "ArrowUp" || e.key === "ArrowRight") turn(e.shiftKey ? 5 : 1); if (e.key === "ArrowDown" || e.key === "ArrowLeft") turn(e.shiftKey ? -5 : -1); });
 }
 
+const PAD_KEYS = {};                                          // key block: bottom row ZXCV = pads 1-4, then ASDF, QWER, 1234
+["zxcv", "asdf", "qwer", "1234"].forEach((row, r) => [...row].forEach((k, c) => { PAD_KEYS[k] = r * 4 + c + 1; }));
 for (const row of [3, 2, 1, 0]) for (let col = 0; col < 4; col++) {          // pad 1 is bottom left, as on the device
   const n = row * 4 + col + 1, b = document.createElement("button");
   b.textContent = String(n).padStart(2, "0"); b.dataset.pad = n - 1; b.setAttribute("aria-label", "Pad " + n);
-  hold(b, "PAD " + n, 100); padsEl.append(b);
+  b.title = "Pad " + n + ": hit near the centre for hard, near the edge for soft; drag while held for pressure. Key: " + Object.keys(PAD_KEYS).find(k => PAD_KEYS[k] === n).toUpperCase();
+  hold(b, "PAD " + n, 100, true); padsEl.append(b);
 }
 // keys: data-keys="NAME|label|sub|class;..." ; one source of truth for what is placed on the panel
 const placed = new Set();
@@ -220,6 +266,7 @@ function makeKey(name, label, sub, cls) {
   const b = document.createElement("button");
   b.className = "k" + (cls ? " " + cls : ""); b.dataset.key = name; b.title = name.replaceAll("_", " ").toLowerCase();
   b.append(label); if (sub) { const i = document.createElement("i"); i.textContent = sub; b.append(i); b.setAttribute("aria-label", label + ", shift: " + sub); }
+  if (/^STEP\d+$/.test(name)) b.dataset.step = name.slice(4);
   if (name === "SHIFT") latch(b, name); else hold(b, name, 127);
   placed.add(name); return b;
 }
@@ -235,20 +282,45 @@ turnable(document.getElementById("wheel"), "DATA_WHEEL");
 const strip = document.getElementById("strip");           // touch strip: bottom = 0, top = 1
 let stripDown = false, stripLast = 0;
 const stripAt = e => { const r = strip.getBoundingClientRect(); return Math.max(0, Math.min(1, (r.bottom - e.clientY) / r.height)); };
-strip.addEventListener("pointerdown", e => { e.preventDefault(); strip.setPointerCapture(e.pointerId); stripDown = true; strip.classList.add("hit"); post("/control", { name: "TOUCH_STRIP", action: "press", value: stripAt(e) }); });
+strip.addEventListener("pointerdown", e => { e.preventDefault(); strip.setPointerCapture(e.pointerId); stripDown = true; strip.classList.add("hit"); ctl({ name: "TOUCH_STRIP", action: "press", value: stripAt(e) }); });
 strip.addEventListener("pointermove", e => {
   if (!stripDown || performance.now() - stripLast < 16) return;
-  stripLast = performance.now(); post("/control", { name: "TOUCH_STRIP", action: "move", value: stripAt(e) });
+  stripLast = performance.now(); ctl({ name: "TOUCH_STRIP", action: "move", value: stripAt(e) }, true);
 });
 for (const name of ["pointerup", "pointercancel"])
-  strip.addEventListener(name, () => { if (stripDown) { stripDown = false; strip.classList.remove("hit"); post("/control", { name: "TOUCH_STRIP", action: "release" }); } });
-function showStrip(leds) {                               // the app lights TOUCH_STRIP_1..25 (ch2)
+  strip.addEventListener(name, () => { if (stripDown) { stripDown = false; strip.classList.remove("hit"); ctl({ name: "TOUCH_STRIP", action: "release" }); } });
+let stripKey = 0.5;                                        // arrow keys on the focused strip: a touch at a new spot
+strip.addEventListener("keydown", e => {
+  const d = e.key === "ArrowUp" || e.key === "ArrowRight" ? 0.05 : e.key === "ArrowDown" || e.key === "ArrowLeft" ? -0.05 : 0;
+  if (!d) return; e.preventDefault(); stripKey = Math.max(0, Math.min(1, stripKey + d));
+  ctl({ name: "TOUCH_STRIP", action: "press", value: stripKey }); ctl({ name: "TOUCH_STRIP", action: "release" });
+});
+// Strip segment i is ch1 CC 56+i. On this product CC 59-63 and 78 double as Q-Link keys and F_KEY (the app's light table names
+// those CCs by the key), and CC 68-71 as the VU lights, so segments 3-7 and 22 are read under the key's name (and only above 16, since a key light never is).
+const STRIP_ALIAS = { 3: "QLINK_PROJECT", 4: "QLINK_PROGRAM", 5: "QLINK_PAD_SCENE", 6: "QLINK_PAD_PARAM", 7: "QLINK_SCREEN", 22: "F_KEY" };
+function showStrip(leds) {                               // the app lights segments 1..25 (ch1 CC 57-81)
   const lit = [];
-  for (let i = 1; i <= 25; i++) if (leds["TOUCH_STRIP_" + i]) lit.push(i);
+  for (let i = 1; i <= 25; i++) if (leds["TOUCH_STRIP_" + i] || leds[STRIP_ALIAS[i]] > 16) lit.push(i);   // a segment is 127; the same CC as a key light is 1-8
   strip.style.setProperty("--lo", lit.length ? (lit[0] - 1) * 4 + "%" : "0%");
   strip.style.setProperty("--len", lit.length ? (lit[lit.length - 1] - lit[0] + 1) * 4 + "%" : "0%");
   strip.setAttribute("aria-valuenow", lit.length ? lit[lit.length - 1] * 4 : 0);
 }
+// Keyboard: space = play/stop (reads the PLAY light), ZXCV/ASDF/QWER/1234 = pads 1-16 (velocity 100). Space/Enter stay with a focused button.
+let lastLeds = {};
+const heldKeys = new Map();
+const tap = name => { ctl({ name, action: "press" }); setTimeout(() => ctl({ name, action: "release" }), 60); };
+addEventListener("keydown", e => {
+  if (e.ctrlKey || e.metaKey || e.altKey || e.target.closest("input, textarea, select, [contenteditable]")) return;
+  if (e.key === " ") {
+    if (e.target.closest("button, summary, [role=slider]")) return;     // a focused control keeps Space
+    e.preventDefault(); if (!e.repeat) tap((lastLeds.PLAY || 0) >= 3 ? "STOP" : "PLAY"); return;
+  }
+  const n = PAD_KEYS[e.key.toLowerCase()];
+  if (!n || e.repeat || heldKeys.has(e.code)) return;
+  const b = padsEl.querySelector(`[data-pad="${n - 1}"]`); heldKeys.set(e.code, b); b._hold.press(100);
+});
+addEventListener("keyup", e => { const b = heldKeys.get(e.code); if (b) { heldKeys.delete(e.code); b._hold.up(); } });
+addEventListener("blur", () => { for (const b of heldKeys.values()) b._hold.up(); heldKeys.clear(); });
 
 // Names in the product's control table that have no place above go in "More keys".
 const MODEL_CONTROLS = __CONTROLS__;
@@ -257,26 +329,41 @@ if (MODEL_CONTROLS) {
   const rest = MODEL_CONTROLS.buttons.filter(n => !placed.has(n) && !(n.startsWith("QLINK") && n.endsWith("_TOUCH")) );
   const touches = MODEL_CONTROLS.buttons.filter(n => /^QLINK\d+_TOUCH$/.test(n) && !placed.has(n));
   for (const n of [...rest, ...touches]) more.append(makeKey(n, pretty(n)));
-  document.getElementById("moreSum").textContent = `More keys (${more.children.length}): names the panel has no printed key for, plus knob touches`;
+  document.getElementById("moreSum").textContent = `Hidden controls (${more.children.length}): in the app's table but with no key on the unit, plus knob touches`;
   document.querySelector("footer").prepend(`${MODEL_CONTROLS.name} (${MODEL_CONTROLS.model}). `);
 }
-const meterBars = document.querySelectorAll("#meter b");
+const meterBars = document.querySelectorAll("#meter b"), meterEl = document.getElementById("meter"), bankDots = document.querySelectorAll("#bankrow b"), bankNum = document.getElementById("banknum");
+// A few keys light under another name (the app's light table names the CC by the lamp it is wired to).
+const LED_ALIAS = { BROWSER: "STEP_SEQ", ARRANGE: "PAD_ASSIGN", PAD_PERFORM: "EMULATE_MPC3000", CHANNEL_MIXER: "EMULATE_VINTAGE", PAD_MIXER: "EMULATE_MPC60", TOUCH_STRIP: "STRIP" };
+const rgb = c => `rgb(${c.map(v => Math.min(255, v * 2)).join(",")})`;      // lights are 7-bit
+let meterSeen = false;   // the meter stays hidden until the app has sent a level
 async function surface() {
   try {
     const r = await fetch("/surface");
     if (r.ok) {
-      const s = await r.json(), leds = s.leds || {};
+      const s = await r.json(), leds = s.leds || {}, lights = s.lights || {}; lastLeds = leds;
       linkEl.textContent = (MODEL_CONTROLS ? MODEL_CONTROLS.name + " " : "") + "control surface: " + (s.active ? "connected" : "waiting for the app");
       for (const b of padsEl.children) {
-        const c = ((s.lights || {}).pads || {})[+b.dataset.pad + 1] || (s.rgb || {})[b.dataset.pad];   // 4 lights per pad; 7-bit
-        if (c && c.some(v => v)) b.style.setProperty("--ring", `rgb(${c.map(v => Math.min(255, v * 2)).join(",")})`); else b.style.removeProperty("--ring");
+        const c = (lights.pads || {})[+b.dataset.pad + 1] || (s.rgb || {})[b.dataset.pad];   // 4 lights per pad; the server gives the first
+        if (c && c.some(v => v)) b.style.setProperty("--ring", rgb(c)); else b.style.removeProperty("--ring");
       }
-      for (const b of document.querySelectorAll("[data-key]")) b.dataset.led = leds[b.dataset.key] || 0;
+      for (const b of document.querySelectorAll("[data-key]")) b.dataset.led = leds[b.dataset.key] ?? leds[LED_ALIAS[b.dataset.key]] ?? 0;
+      const steps = lights.steps || {};
+      for (const b of document.querySelectorAll("[data-step]")) {
+        const c = steps[b.dataset.step];
+        if (c && c.some(v => v)) b.style.setProperty("--sc", rgb(c)); else b.style.removeProperty("--sc");
+      }
+      let bank = 0;
+      bankDots.forEach((d, i) => { const v = leds["QLINK_BANK_" + (i + 1)] || 0; d.dataset.led = v; if (v >= 3) bank = i + 1; });
+      bankNum.textContent = bank ? " " + bank : "";
       showStrip(leds);
-      ["LEFT", "RIGHT"].forEach((side, i) => {           // the app sends each meter as a low and a high 7-bit value
-        const v = (leds[`MAIN_OUTPUT_METER_${side}_LOW`] ?? leds[`VU_${side}_LOW`] ?? 0) + (leds[`MAIN_OUTPUT_METER_${side}_HIGH`] ?? leds[`VU_${side}_HIGH`] ?? 0);
-        meterBars[i].style.height = Math.min(100, v / 2.54) + "%";
+      const meters = lights.meters || {};                // segments 0..6 per meter
+      ["LEFT", "RIGHT"].forEach((side, i) => {
+        const m = meters["MAIN_OUTPUT_" + side] || meters["VU_" + side] || {}, v = m.segments || 0;
+        if (v) meterSeen = true;
+        meterBars[i].style.height = Math.min(100, v / 6 * 100) + "%";
       });
+      if (meterSeen) meterEl.hidden = false;
     } else linkEl.textContent = "control surface: not available";
   } catch { linkEl.textContent = "control surface: not available"; }
   setTimeout(surface, 200);
@@ -287,6 +374,9 @@ surface();
 // worker reads it and hands chunks to a worklet that plays them from a ring buffer, resampling
 // by up to 0.3% to hold ~7 ms queued (guest and sound-card clocks drift). Starts on a click
 // (browser autoplay rule); the button then suspends and resumes the context.
+// The "In" button next to it picks what the app hears on inputs 1-2 (POST /audio): off,
+// the bridge's test tone, or this computer's microphone, which a recorder worklet sends back
+// over the same WebSocket (the browser asks for permission; it needs the sound context running).
 const WORKLET = `
 class Player extends AudioWorkletProcessor {
   constructor() {
@@ -329,12 +419,27 @@ class Player extends AudioWorkletProcessor {
     return true;
   }
 }
+class Recorder extends AudioWorkletProcessor {
+  constructor() { super(); this.out = new Int16Array(512 * 2); this.n = 0; }
+  process(inputs) {
+    const inp = inputs[0];
+    if (!inp.length) return true;
+    const L = inp[0], R = inp[1] || inp[0];
+    for (let i = 0; i < L.length; i++) {
+      this.out[this.n * 2] = Math.max(-1, Math.min(1, L[i])) * 32767;
+      this.out[this.n * 2 + 1] = Math.max(-1, Math.min(1, R[i])) * 32767;
+      if (++this.n === 512) { this.port.postMessage(this.out.slice().buffer); this.n = 0; }
+    }
+    return true;
+  }
+}
 registerProcessor("mpclab-player", Player);
+registerProcessor("mpclab-recorder", Recorder);
 `;
 const AUDIO_WORKER = `
-let out = null, rest = new Uint8Array(0);
+let out = null, ws = null, rest = new Uint8Array(0);
 function connect(url) {
-  const ws = new WebSocket(url);   // QEMU's chardev for the bridge's "mpclab.pcm" port
+  ws = new WebSocket(url);   // QEMU's chardev for the bridge's "mpclab.pcm" port
   ws.binaryType = "arraybuffer";
   ws.onmessage = m => {
     if (typeof m.data === "string") return;
@@ -344,24 +449,30 @@ function connect(url) {
     rest = b.slice(n);
     if (n) { const c = b.slice(0, n).buffer; out.postMessage(c, [c]); }
   };
-  ws.onclose = () => setTimeout(() => connect(url), 1000);
+  ws.onclose = () => { ws = null; setTimeout(() => connect(url), 1000); };
 }
-onmessage = e => { out = e.data.port; connect(e.data.url); };
+onmessage = e => {
+  if (e.data instanceof ArrayBuffer) { if (ws && ws.readyState === 1) ws.send(e.data); return; }   // microphone
+  out = e.data.port; connect(e.data.url);
+};
 `;
-const soundBtn = document.getElementById("sound");
-let actx = null;
+const soundBtn = document.getElementById("sound"), inBtn = document.getElementById("audioin");
+let actx = null, audioWorker = null, mic = null, micWanted = false, inState = "off";
+async function startAudio() {
+  actx = new AudioContext({ sampleRate: 44100, latencyHint: 0 });
+  await actx.audioWorklet.addModule(URL.createObjectURL(new Blob([WORKLET], { type: "text/javascript" })));
+  const player = new AudioWorkletNode(actx, "mpclab-player", { numberOfInputs: 0, outputChannelCount: [2] });
+  volNode = actx.createGain(); volNode.gain.value = vol; player.connect(volNode).connect(actx.destination);
+  const ch = new MessageChannel();
+  player.port.postMessage({ port: ch.port1 }, [ch.port1]);
+  audioWorker = new Worker(URL.createObjectURL(new Blob([AUDIO_WORKER], { type: "text/javascript" })));
+  audioWorker.postMessage({ port: ch.port2, url: `ws://${location.hostname}:__PCM__` }, [ch.port2]);
+  actx.onstatechange = showSound;
+  syncMic(micWanted);
+}
 async function toggleSound() {
-  if (!actx) {
-    actx = new AudioContext({ sampleRate: 44100, latencyHint: 0 });
-    await actx.audioWorklet.addModule(URL.createObjectURL(new Blob([WORKLET], { type: "text/javascript" })));
-    const player = new AudioWorkletNode(actx, "mpclab-player", { numberOfInputs: 0, outputChannelCount: [2] });
-    player.connect(actx.destination);
-    const ch = new MessageChannel();
-    player.port.postMessage({ port: ch.port1 }, [ch.port1]);
-    const worker = new Worker(URL.createObjectURL(new Blob([AUDIO_WORKER], { type: "text/javascript" })));
-    worker.postMessage({ port: ch.port2, url: `ws://${location.hostname}:__PCM__` }, [ch.port2]);
-    actx.onstatechange = showSound;
-  } else if (actx.state === "running") await actx.suspend();
+  if (!actx) await startAudio();
+  else if (actx.state === "running") await actx.suspend();
   else await actx.resume();
   showSound();
 }
@@ -370,6 +481,54 @@ function showSound() {
   soundBtn.textContent = on ? "Sound on" : "Sound off"; soundBtn.setAttribute("aria-pressed", on);
 }
 soundBtn.addEventListener("click", toggleSound);
+// Main volume knob: page playback level only (the real knob is analog, after the app).
+let vol = 1, volNode = null;
+const volKnob = document.getElementById("mainvol");
+function setVol(v) { vol = Math.min(1, Math.max(0, v)); volKnob.style.setProperty("--turn", (vol * 270 - 135) + "deg"); if (volNode) volNode.gain.value = vol; }
+volKnob.addEventListener("pointerdown", e => { e.preventDefault(); volKnob.setPointerCapture(e.pointerId); });
+volKnob.addEventListener("pointermove", e => { if (volKnob.hasPointerCapture(e.pointerId)) setVol(vol - e.movementY / 150); });
+volKnob.addEventListener("keydown", e => { if (e.key === "ArrowUp") setVol(vol + .05); if (e.key === "ArrowDown") setVol(vol - .05); });
+setVol(1);
+async function syncMic(want) {   // input "mic": this computer's microphone -> the bridge -> app inputs 1-2
+  micWanted = want;
+  if (!actx || want === !!mic) return;
+  if (!want) { if (mic.stream) { mic.stream.getTracks().forEach(t => t.stop()); mic.node.disconnect(); } mic = null; return; }
+  mic = { pending: true };
+  try {
+    const stream = await navigator.mediaDevices.getUserMedia({ audio: { echoCancellation: false, noiseSuppression: false, autoGainControl: false } });
+    if (!micWanted) { stream.getTracks().forEach(t => t.stop()); mic = null; return; }   // switched away meanwhile
+    const node = new AudioWorkletNode(actx, "mpclab-recorder");
+    node.port.onmessage = e => audioWorker && audioWorker.postMessage(e.data, [e.data]);
+    actx.createMediaStreamSource(stream).connect(node);
+    mic = { stream, node };
+  } catch (e) { mic = null; inBtn.title = "No microphone access: " + e.message; }
+  showIn();
+}
+function showIn(levels) {
+  const db = levels && levels.in ? Math.max(...levels.in) : 0;
+  const lv = db > 0 ? ` ${Math.round(20 * Math.log10(db))} dB` : "";
+  const wait = inState === "mic" && !(mic && mic.stream) ? (!actx ? " (click Sound)" : mic && mic.pending ? " (asking)" : " (no access)") : "";
+  inBtn.textContent = "In: " + inState + (wait || lv);
+  inBtn.setAttribute("aria-pressed", inState !== "off");
+}
+inBtn.addEventListener("click", async () => {
+  const next = { off: "tone", tone: "mic", mic: "off" }[inState];
+  if (next === "mic") { if (!actx) await startAudio(); else if (actx.state !== "running") await actx.resume(); showSound(); }
+  try { await fetch("/audio", { method: "POST", body: JSON.stringify({ in: next }) }); } catch {}
+  pollIn();
+});
+let inTimer = null;
+async function pollIn() {   // GET /audio: the input source (the API may change it) and the bridge's input peaks
+  clearTimeout(inTimer);
+  try {
+    const a = await (await fetch("/audio")).json();
+    inState = a.in;
+    syncMic(inState === "mic");
+    showIn(a.levels);
+  } catch { inBtn.textContent = "In: ?"; }
+  inTimer = setTimeout(pollIn, 500);
+}
+pollIn();
 </script>
 </body>
 </html>

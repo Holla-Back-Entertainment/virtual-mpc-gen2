@@ -1,0 +1,35 @@
+#!/bin/sh
+# Lab only (mpclab-nvme-prepare.service): first boot of a blank lab NVMe (out/run/nvme.qcow2).
+# Layout the stock units expect: GPT, part1 -> /synths (read-only, synths.mount from
+# az04-synths-generator; acvg-nvme-update.sh remounts it rw to unpack its update),
+# part2 -> /nvme (user storage, nvme.mount). Neither unit names a filesystem type.
+# Lab choices (the factory layout is not in the update image): part1 ext4 8 GiB, label
+# "synths"; part2 exFAT, Microsoft basic data, label "<MPC|Force> User" as
+# setup-acvs-user-partition.sh names the user partition on eMMC-only units.
+# Uses the firmware's own fdisk, mkfs.ext4 and mkfs.exfat.
+set -eu
+DISK=$(readlink -f /dev/disk/by-path/platform-a40000000.pcie-pci-0000:01:00.0-nvme-1)
+NAME=${DISK##*/}
+case "$(cat "/sys/block/$NAME/device/serial" 2>/dev/null)" in
+    mpclab-nvme*) ;;
+    *) echo "$DISK is not the lab NVMe, leaving it alone" >&2; exit 0 ;;
+esac
+if [ -e "/sys/block/$NAME/${NAME}p1" ]; then
+    echo "$DISK already partitioned"
+    exit 0
+fi
+
+case "$(cat /sys/firmware/devicetree/base/model)" in
+    *Force*) USER_LABEL="Force User" ;;
+    *)       USER_LABEL="MPC User" ;;
+esac
+
+echo "partitioning blank $DISK"
+# g: new GPT; part1 8 GiB Linux filesystem; part2 the rest, Microsoft basic data
+printf 'g\nn\n1\n\n+8G\nt\n0FC63DAF-8483-4772-8E79-3D69D8477DE4\nn\n2\n\n\nt\n2\nEBD0A0A2-B9E5-4433-87C0-68B6B72699C7\nw\n' \
+    | fdisk -w always "$DISK"
+udevadm settle
+mkfs.ext4 -q -L synths "${DISK}p1"
+mkfs.exfat -L "$USER_LABEL" "${DISK}p2"
+udevadm trigger --settle "${DISK}p1" "${DISK}p2"
+echo "prepared $DISK: ${DISK}p1 ext4 synths, ${DISK}p2 exFAT $USER_LABEL"

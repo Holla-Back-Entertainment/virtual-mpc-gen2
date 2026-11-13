@@ -8,6 +8,7 @@ for macOS, Windows and Linux.
     python3 lab.py ssh [command...]   # root shell in the VM
     python3 lab.py preload LIB.so | --off           # restart the app with LD_PRELOAD
     python3 lab.py autorun PACKAGE.zip [--no-reboot] [--yes] [--device-label] | --results
+    python3 lab.py firstrun           # tap past the welcome wizard and first dialogs to the main view
     python3 lab.py stop | reset | status            # stop = power key + SHUT DOWN, as on the device
 
 MODEL=acvc|acvg picks the product; MPCLAB_PORT_OFFSET=N moves every port by N (README-GEN2.md).
@@ -31,13 +32,13 @@ import urllib.request
 
 LAB = os.path.dirname(os.path.abspath(__file__))
 OUT = os.path.join(LAB, "out")
-RUN = os.path.join(OUT, "run")
 SHARE = os.path.join(LAB, "share")
 SDCARD = os.path.join(LAB, "sdcard")            # host folder that becomes the SD card
-SD_IMG = os.path.join(RUN, "sdcard.img")
 SD_SIZE = 512 << 20                             # QEMU's sd-card wants a power-of-two size
+# internal NVMe (XL / Live III): sparse qcow2 made on first run, kept by `reset` unless --nvme.
+# Blank at creation; the lab layer's mpclab-nvme-prepare partitions it on first boot.
+NVME_SIZE = "32G"
 FW_DIR = os.environ.get("FW_DIR", os.path.join(LAB, "firmware"))   # extracted firmware, never committed
-CONTENT_DIR = os.environ.get("CONTENT_DIR", os.path.join(FW_DIR, "content"))   # factory library copy
 IMAGE = "mpclab-tools"
 # Gen 2 products this lab can pose as (device tree identity + screen size). MODEL=acvg for Live III.
 # Both panels are 800x1280 portrait, rotated in the device tree; the app draws 1280x800 landscape.
@@ -46,11 +47,68 @@ IMAGE = "mpclab-tools"
 MODELS = {"acvc": {"model": "Akai Professional MPC XL", "screen": (1280, 800), "card": "MPC XL"},
           "acvg": {"model": "Akai Professional MPC Live III", "screen": (1280, 800), "card": "MPC LIVE3"}}
 MODEL = os.environ.get("MODEL", "acvc")
+if MODEL not in MODELS:
+    sys.exit(f"lab: MODEL={MODEL}: use one of {', '.join(MODELS)}")
 HOST = "127.0.0.1"
-# Gen 2 lab: every port is the Sample lab's + 100, so both labs can run at once
-PORTS = {"cs": 5651, "ext_midi": 5652, "console": 5653, "qmp": 5654, "qmp_panel": 5655, "audio": 5656, "pcm": 5657, "vnc": 6010, "ssh": 2122, "usb_ssh": 2322, "panel": 8865}
-# a second copy of the lab (an agent's working copy) runs beside this one with MPCLAB_PORT_OFFSET=20 etc.
-PORTS = {k: v + int(os.environ.get("MPCLAB_PORT_OFFSET", "0")) for k, v in PORTS.items()}
+# Gen 2 lab: the XL's ports are the Sample lab's + 100, so both labs can run at once. Each model
+# has its own ports (Live III = XL + MODEL_PORT_STEP) and its own run directory (out/run-<model>),
+# so an XL and a Live III run side by side from one copy. A second copy of the lab (an agent's
+# working copy) moves all of them with MPCLAB_PORT_OFFSET; space copies 20 apart (offset 10 = the
+# other model's ports).
+BASE_PORTS = {"cs": 5651, "ext_midi": 5652, "console": 5653, "qmp": 5654, "qmp_panel": 5655, "audio": 5656, "pcm": 5657, "vnc": 6010, "ssh": 2122, "usb_ssh": 2322, "panel": 8865}
+MODEL_PORT_STEP = 10
+
+
+def model_ports(model, offset=None):
+    """Ports of one model: BASE_PORTS + its step (XL 0, Live III 10) + MPCLAB_PORT_OFFSET."""
+    if offset is None:
+        offset = int(os.environ.get("MPCLAB_PORT_OFFSET", "0"))
+    step = list(MODELS).index(model) * MODEL_PORT_STEP
+    return {k: v + step + offset for k, v in BASE_PORTS.items()}
+
+
+def run_dir(model, out=OUT):
+    """out/run-<model>: the model's eMMC overlay, SD image, DTB, console log, screen files.
+    Before this split everything was in out/run (an XL): until `run` migrates it, that is the XL's."""
+    new, legacy = os.path.join(out, "run-" + model), os.path.join(out, "run")
+    if (model == "acvc" and os.path.isdir(legacy) and not os.path.islink(legacy)
+            and os.path.exists(os.path.join(legacy, "emmc.qcow2")) and not os.path.exists(os.path.join(new, "emmc.qcow2"))):
+        return legacy                     # the eMMC overlay (the XL's state) decides, not stray files
+    return new
+
+
+def image_in_use(path, qimg="qemu-img"):
+    """True when a running QEMU holds `path` (qcow2 write lock), so its directory must not move."""
+    if not os.path.exists(path) or not shutil.which(qimg):
+        return False
+    r = subprocess.run([qimg, "info", path], capture_output=True, text=True)
+    return r.returncode != 0 and "lock" in r.stderr
+
+
+def migrate_legacy_run(out=OUT):
+    """out/run (one XL, before per-model run directories) -> out/run-acvc, plus a link out/run ->
+    run-acvc so older scripts and habits (out/run/console.log) still find the XL. Skipped while a
+    QEMU still runs from out/run (its eMMC is locked): that VM keeps its paths until it stops."""
+    legacy, new = os.path.join(out, "run"), os.path.join(out, "run-acvc")
+    if run_dir("acvc", out) != legacy or image_in_use(os.path.join(legacy, "emmc.qcow2")):
+        return False
+    if os.path.isdir(new):                # files a helper wrote there first: out/run's win
+        for name in os.listdir(legacy):
+            os.replace(os.path.join(legacy, name), os.path.join(new, name))
+        os.rmdir(legacy)
+    else:
+        os.rename(legacy, new)
+    try:
+        os.symlink("run-acvc", legacy, target_is_directory=True)
+    except OSError:                       # Windows without symlink rights: the link is a convenience
+        pass
+    return True
+
+
+PORTS = model_ports(MODEL)
+RUN = run_dir(MODEL)
+NVME_IMG = os.path.join(RUN, "nvme.qcow2")
+SD_IMG = os.path.join(RUN, "sdcard.img")
 WIN = sys.platform == "win32"
 
 
@@ -124,6 +182,118 @@ def touch(x, y, hold=0.08):
                                     mtt("data", axis="y", value=y * 32767 // (h - 1))])
     time.sleep(hold)
     qmp("input-send-event", events=[mtt("end", **{"tracking-id": -1})])   # -1 lifts the finger
+
+
+def read_ppm(path):
+    """Binary PPM (QEMU's default screendump format) -> (width, height, RGB bytes)."""
+    with open(path, "rb") as f:
+        data = f.read()
+    fields, pos = [], 0
+    while len(fields) < 4:                     # P6 width height maxval, whitespace separated
+        while data[pos:pos + 1].isspace():
+            pos += 1
+        end = pos
+        while not data[end:end + 1].isspace():
+            end += 1
+        fields.append(data[pos:end])
+        pos = end
+    if fields[0] != b"P6" or fields[3] != b"255":
+        raise ValueError(f"{path}: not an 8-bit binary PPM")
+    w, h = int(fields[1]), int(fields[2])
+    return w, h, data[pos + 1:pos + 1 + w * h * 3]
+
+
+def screen_grab():
+    """The screen now, as (width, height, RGB bytes): a PPM screendump into RUN (a few ms)."""
+    os.makedirs(RUN, exist_ok=True)
+    path = os.path.join(RUN, "lab-screen.ppm")
+    r = qmp("screendump", filename=path)
+    if "error" in r:
+        raise OSError(r["error"]["desc"])
+    return read_ppm(path)
+
+
+# ----------------------------------------------------------------------------- first-run screens
+# What the app shows after every start (3.10.0, XL and Live III, 1280x800), and how `firstrun` tells
+# the screens apart from a few pixels of one screendump (classify_screen):
+#   wizard     Welcome / Learn how / Please connect: each a full-screen page of one flat colour
+#              (all four corners equal and not dark) with one flat button: NEXT and LET'S GO in the
+#              middle (420-860 x 590-690), GOT IT on the right (790-1130).
+#   select     Select Project: undimmed header grey (23,23,23) at the top left, black list,
+#              NEW PROJECT and USER TEMPLATE buttons bottom left, black bottom middle.
+#   dialog     an info dialog over the dimmed app (top left darker than the header grey, dark):
+#              button grey at 440 and 625 on the bottom row = the first button (OK, DON'T SHOW
+#              AGAIN, SHUT DOWN); button grey at 660 and 830 too = a second one (REMIND ME LATER,
+#              CANCEL), which is the one firstrun takes, so it never answers "don't show again".
+#   app        undimmed header grey top left, none of the above: the main view (or any app page).
+# Anything else (boot splash, black, a page fading in) is "wait". Probes avoid button labels.
+GREY, BLACK = (23, 23, 23), (0, 0, 0)
+FIRSTRUN_TAPS = {"NEXT": (640, 640), "GOT IT": (960, 640), "NEW PROJECT": (106, 770),
+                 "OK": (532, 770), "REMIND ME LATER": (745, 770)}
+SCREEN_PROBES = [(5, 5), (1274, 5), (5, 794), (1274, 794), (1110, 610), (1110, 670), (440, 610), (780, 670),
+                 (640, 400), (20, 770), (200, 770), (640, 770), (440, 770), (625, 770), (660, 770), (830, 770)]
+
+
+def screen_samples(grab):
+    w, h, px = grab
+    return {(x, y): tuple(px[(y * w + x) * 3:(y * w + x) * 3 + 3]) for x, y in SCREEN_PROBES}
+
+
+def classify_screen(p):
+    """p: {(x, y): (r, g, b)} at SCREEN_PROBES -> (state, button to tap or None)."""
+    corners = {p[(5, 5)], p[(1274, 5)], p[(5, 794)], p[(1274, 794)]}
+    bg = p[(5, 5)]
+    if len(corners) == 1 and max(bg) > 60:
+        if p[(1110, 610)] == p[(1110, 670)] != bg:
+            return "wizard", "GOT IT"
+        if p[(440, 610)] == p[(780, 670)] != bg:
+            return "wizard", "NEXT"                     # NEXT and LET'S GO sit at the same place
+        return "wizard", None                           # still drawing its button
+    if bg == GREY:
+        if p[(640, 400)] == BLACK and p[(20, 770)] == p[(200, 770)] == GREY and p[(640, 770)] == BLACK:
+            return "select", "NEW PROJECT"
+        return "app", None
+    if max(bg) < 60 and p[(440, 770)] == p[(625, 770)] == GREY:
+        return "dialog", "REMIND ME LATER" if p[(660, 770)] == p[(830, 770)] == GREY else "OK"
+    return "wait", None
+
+
+def first_run(timeout=300, settle=6, log=print):
+    """Tap through the first-run screens while they show; return when the app view has stayed
+    up for `settle` s (info dialogs pop up a few seconds after a new project opens)."""
+    end, app_since, last, shots = time.time() + timeout, None, None, 0
+    while time.time() < end:
+        a = screen_samples(screen_grab())
+        time.sleep(0.4)
+        b = screen_samples(screen_grab())
+        if a != b:                                      # fading in or animating: look again
+            continue
+        state, button = classify_screen(b)
+        if state != last:
+            log(f"screen: {state}")
+            last = state
+        if state == "app":
+            app_since = app_since or time.time()
+            if time.time() - app_since >= settle:
+                return True
+            time.sleep(1)
+            continue
+        app_since = None
+        if not button:
+            time.sleep(1)
+            continue
+        if state == "dialog":                           # keep what it said: RUN/firstrun-dialog-N.png
+            shots += 1
+            qmp("screendump", filename=os.path.join(RUN, f"firstrun-dialog-{shots}.png"), format="png")
+            log(f"dialog: tap {button} ({os.path.relpath(RUN, LAB)}/firstrun-dialog-{shots}.png)")
+        else:
+            log(f"{state}: tap {button}")
+        touch(*FIRSTRUN_TAPS[button])
+        for _ in range(20):                             # until the screen answers (<= 6 s)
+            time.sleep(0.3)
+            if screen_samples(screen_grab()) != b:
+                break
+    return False
 
 
 def guest_off():
@@ -265,7 +435,11 @@ def patch_dtb(blob):
     })
     chosen = root.child("chosen")
     chosen.props.pop("stdout-path", None)     # the first PL011 is the panel, not a console
-    chosen.props["inmusic,emmc-content"] = b""
+    # The FIT's own rk3588-az04-acvc / -acvg trees have chosen { inmusic,nvme-fitted; } and no
+    # emmc-content: on the XL / Live III /content is not mounted; /nvme (user) and /synths
+    # (content) are the NVMe's partitions 2 and 1 (the lab's QEMU NVMe, see lab-layer udev rule).
+    chosen.props.pop("inmusic,emmc-content", None)
+    chosen.props["inmusic,nvme-fitted"] = b""
     chosen.props["u-boot,version"] = s("2024.01-mpclab")
     # same bindings as serial@fe670000 (panel MCU) and serial@fe680000 (rear MIDI) on the device
     cs = root.child("pl011@9000000", create=False).child("control-surface")
@@ -284,7 +458,7 @@ def sdcard_image(qimg=None):
     """sdcard/ -> FAT16 image labelled MODELS[MODEL]["card"] (/media/MPC XL in the VM), built by QEMU's vvfat.
     shortcut: vvfat FAT16 holds at most ~500 MB; write a FAT32/exFAT builder when that is too small."""
     os.makedirs(SDCARD, exist_ok=True)
-    os.makedirs(RUN, exist_ok=True)
+    os.makedirs(os.path.dirname(SD_IMG), exist_ok=True)
     spec = json.dumps({"driver": "vvfat", "dir": SDCARD, "fat-type": 16, "label": MODELS[MODEL]["card"]})
     tmp = SD_IMG + ".new"
     r = subprocess.run([qimg or tool("qemu-img"), "convert", "-q", "-O", "raw", "json:" + spec, tmp], capture_output=True, text=True)
@@ -311,9 +485,19 @@ def accel_choice(want):
     return "tcg"   # x86 hosts (Windows, Intel Mac, x86 Linux): software emulation of the A55
 
 
+def use_run(path):
+    """Point RUN and the paths derived from it at `path` (after migrate_legacy_run)."""
+    global RUN, SD_IMG, NVME_IMG, AUTORUN_IMG, AUTORUN_DIR
+    RUN, SD_IMG, NVME_IMG = path, os.path.join(path, "sdcard.img"), os.path.join(path, "nvme.qcow2")
+    AUTORUN_IMG, AUTORUN_DIR = os.path.join(path, "autorun-card.img"), os.path.join(path, "autorun-pkg")
+
+
 def cmd_run(a):
     if port_open(PORTS["qmp"]):
-        die("the lab VM is already running (stop it first: python3 lab.py stop)")
+        die(f"the {MODELS[MODEL]['model']} VM is already running (stop it first: MODEL={MODEL} python3 lab.py stop)")
+    if MODEL == "acvc" and migrate_legacy_run():
+        print("lab: moved out/run to out/run-acvc (the XL's run directory; out/run links to it)")
+    use_run(run_dir(MODEL))
     for f in ("kernel/Image", "initramfs.cpio.gz", "emmc.base.qcow2", "lab-layer.ext4", "fw/cmdline.txt"):
         if not os.path.exists(os.path.join(OUT, f)):
             die(f"missing out/{f}: run `python3 lab.py build` first")
@@ -351,6 +535,8 @@ def cmd_run(a):
     emmc = os.path.join(RUN, "emmc.qcow2")
     if not os.path.exists(emmc):
         subprocess.run([qimg, "create", "-q", "-f", "qcow2", "-F", "qcow2", "-b", os.path.join(OUT, "emmc.base.qcow2"), emmc], check=True)
+    if not os.path.exists(NVME_IMG):
+        subprocess.run([qimg, "create", "-q", "-f", "qcow2", NVME_IMG, NVME_SIZE], check=True)
 
     # SD card: inserted at boot when sdcard/ has files. The image is kept between runs so what
     # the app saves on the card survives a reboot; re-insert from the panel to copy sdcard/ again.
@@ -368,6 +554,8 @@ def cmd_run(a):
            "-drive", f"if=none,id=emmc,file={qarg(emmc)},format=qcow2", "-device", "virtio-blk-pci,drive=emmc,serial=mpclab-emmc",
            "-drive", f"if=none,id=layer,file={qarg(os.path.join(OUT, 'lab-layer.ext4'))},format=raw,readonly=on",
            "-device", "virtio-blk-pci,drive=layer,serial=mpclab-layer",
+           # the XL / Live III internal drive; the serial is what the lab udev rule matches
+           "-drive", f"if=none,id=nvme,file={qarg(NVME_IMG)},format=qcow2", "-device", "nvme,drive=nvme,serial=mpclab-nvme",
            "-device", "sdhci-pci,id=sdhci", "-drive", "if=none,id=sdcard" + card, "-device", "sd-card,drive=sdcard,id=sd0",
            "-device", "virtio-gpu-pci,xres=%d,yres=%d" % MODELS[MODEL]["screen"], "-device", "virtio-multitouch-pci", "-device", "virtio-keyboard-pci",   # Gen 2 has a touchscreen
            # Gen 2 has no panel UART: the first PL011 stays as a dead "Control Surface" card
@@ -494,7 +682,7 @@ def cmd_preload(a):
 
 def cmd_stop(a):
     if not port_open(PORTS["qmp"]):
-        die("the VM is not running")
+        die(f"the {MODELS[MODEL]['model']} VM (MODEL={MODEL}) is not running")
     if shut_down():                           # as on the device: power key, SHUT DOWN, the app saves
         print("lab: the MPC powered off cleanly")
     else:
@@ -506,18 +694,54 @@ def cmd_stop(a):
                                               # a quick restart must not find it still up
 
 
+def cmd_firstrun(a):
+    """Past the welcome wizard, Select Project (NEW PROJECT) and the info dialogs, to the main view."""
+    if not port_open(PORTS["qmp"]):
+        die(f"the {MODELS[MODEL]['model']} VM (MODEL={MODEL}) is not running")
+    if guest_off():
+        die("the MPC is powered off (POWER on the page turns it on)")
+    if not first_run(a.timeout, log=lambda m: print("lab:", m)):
+        die(f"not at the app's main view after {a.timeout} s (screen: python3 scripts/qmp.py screendump x.png)")
+    print("lab: at the app's main view")
+
+
 def cmd_reset(a):
     if port_open(PORTS["qmp"]):
-        die("stop the VM first")
+        die(f"stop the {MODELS[MODEL]['model']} VM first (MODEL={MODEL} python3 lab.py stop)")
     path = os.path.join(RUN, "emmc.qcow2")
     if os.path.exists(path):
         os.remove(path)
-    print("lab: next start uses a clean eMMC (fresh /data and /factory)")
+    print(f"lab: next {MODELS[MODEL]['model']} start uses a clean eMMC (fresh /data and /factory; {os.path.relpath(path, LAB)})")
+    if a.nvme:
+        if os.path.exists(NVME_IMG):
+            os.remove(NVME_IMG)
+        print("lab: next start uses a blank NVMe (partitioned on first boot: empty /nvme and /synths)")
+    else:
+        print("lab: internal NVMe kept (/nvme user storage, /synths); `reset --nvme` wipes it too")
+
+
+def model_state(model):
+    """'off' (no QEMU), or QEMU's guest status (running / shutdown / paused ...)."""
+    port = model_ports(model)["qmp"]
+    if not port_open(port):
+        return "off"
+    try:
+        return qmp("query-status", port=port)["return"]["status"]
+    except (OSError, KeyError, ValueError):
+        return "QEMU up, QMP busy"
 
 
 def cmd_status(a):
-    for name, port in PORTS.items():
-        print(f"{name:10s} {HOST}:{port}  {'open' if port_open(port) else '-'}")
+    """Both models: state, run directory, every port (open or not). `*` marks MODEL."""
+    ports = {m: model_ports(m) for m in MODELS}
+    print(f"MPCLAB_PORT_OFFSET={os.environ.get('MPCLAB_PORT_OFFSET', '0')}")
+    for m in MODELS:
+        star = "*" if m == MODEL else " "
+        print(f"{star}{m}  {MODELS[m]['model']:31s} {model_state(m):10s} {os.path.relpath(run_dir(m), LAB)}  "
+              f"page http://{HOST}:{ports[m]['panel']}/")
+    print(f"\n{'port':10s}" + "".join(f"{m:>14s}" for m in MODELS))
+    for name in BASE_PORTS:
+        print(f"{name:10s}" + "".join(f"{ports[m][name]:>9d} {'open' if port_open(ports[m][name]) else '   -'}" for m in MODELS))
 
 
 # ----------------------------------------------------------------------------- autorun packages
@@ -653,7 +877,7 @@ def wait_app(timeout=240):
         except (RuntimeError, subprocess.TimeoutExpired):
             time.sleep(3)
     raise RuntimeError("no app audio in %d s: the boot stalled, or the package stopped the app and did not start its own "
-                       "(python3 lab.py autorun --results; out/run/console.log is the guest console)" % timeout)
+                       "(python3 lab.py autorun --results; %s/console.log is the guest console)" % (timeout, os.path.relpath(RUN, LAB)))
 
 
 # what the app and its helpers log about card scripts: az01-signed-fs checks each
@@ -691,7 +915,7 @@ def run_autorun(zip_path, reboot=True, confirm=False, log=print, label=AUTORUN_L
             wait_app()
         except RuntimeError:
             # Under HVF the first boot after a power-off sometimes stalls before the runner
-            # starts (CPU 0 stops answering: "rcu_preempt detected stalls" in out/run/console.log,
+            # starts (CPU 0 stops answering: "rcu_preempt detected stalls" in out/run-<model>/console.log,
             # the splash stays, nothing on the card). A second reset has always booted cleanly.
             log("no app after 4 min: the boot stalled (known HVF issue), resetting once more")
             qmp("system_reset")
@@ -752,12 +976,10 @@ def cmd_build(a):
         verify_inputs()
         docker("sh", "/lab/scripts/build-images.sh", mounts=[(os.path.join(FW_DIR, v), "/fw/" + k) for k, v in fw.items()])
     if "content" in steps:
-        if not os.path.isdir(CONTENT_DIR):
-            print(f"lab: no factory library at CONTENT_DIR={CONTENT_DIR}: /content stays empty (README: Factory library)")
-        elif port_open(PORTS["qmp"]):
-            die("stop the VM first (python3 lab.py stop): the content step rewrites the eMMC base image")
-        else:
-            docker("sh", "/lab/scripts/build-content.sh", mounts=[(CONTENT_DIR, "/content")])
+        # build-content.sh fills eMMC partition 11, which only units with chosen/inmusic,emmc-content
+        # mount; the XL / Live III keep content on the NVMe (README-GEN2.md: Factory content).
+        print("lab: content step skipped: on the XL / Live III factory content lives on the internal NVMe "
+              "(/synths), not on the eMMC /content partition (README-GEN2.md: Factory content)")
 
 
 def verify_inputs():
@@ -791,6 +1013,8 @@ def selftest():
     assert midi.props["label"] == b"External MIDI\0" and struct.unpack(">I", midi.props["current-speed"])[0] == 31250
     assert fdt_dump(*fdt_load(blob)) == blob
     assert r2.child("aliases").props["mmc0"] == b"/emmc\0" and r2.child("emmc").props["status"] == b"disabled\0"
+    # chosen as in the FIT's acvc/acvg trees: NVMe fitted, no eMMC content partition
+    assert "inmusic,nvme-fitted" in r2.child("chosen").props and "inmusic,emmc-content" not in r2.child("chosen").props
     if shutil.which("qemu-img"):   # card image: power-of-two size, FAT label where blkid looks for it
         global SDCARD, SD_IMG
         import tempfile
@@ -825,7 +1049,57 @@ def selftest():
             raise AssertionError("zip with ../ accepted")
         except ValueError:
             pass
+    selftest_models()
     print("lab selftest ok")
+
+
+def selftest_models():
+    import tempfile
+    # ports: the XL keeps the lab's historical numbers; the Live III is XL + 10; the offset moves both
+    xl, l3 = model_ports("acvc", 0), model_ports("acvg", 0)
+    assert xl == BASE_PORTS and xl["panel"] == 8865 and xl["qmp"] == 5654 and xl["vnc"] == 6010 and xl["ssh"] == 2122
+    assert all(l3[k] == xl[k] + 10 for k in xl) and l3["panel"] == 8875
+    assert model_ports("acvg", 40)["panel"] == 8915 and model_ports("acvc", 40)["qmp"] == 5694
+    assert not set(xl.values()) & set(l3.values()) and len(set(xl.values())) == len(xl)
+    assert PORTS == model_ports(MODEL) and RUN == run_dir(MODEL)
+    # run directories, and the move of a pre-split out/run (one XL) to out/run-acvc
+    with tempfile.TemporaryDirectory() as out:
+        assert run_dir("acvc", out) == os.path.join(out, "run-acvc") and run_dir("acvg", out) == os.path.join(out, "run-acvg")
+        legacy = os.path.join(out, "run")
+        os.makedirs(legacy)
+        assert run_dir("acvc", out) == os.path.join(out, "run-acvc")    # out/run without an eMMC: nothing to keep
+        open(os.path.join(legacy, "emmc.qcow2"), "w").close()
+        open(os.path.join(legacy, "console.log"), "w").write("old")
+        assert run_dir("acvc", out) == legacy and run_dir("acvg", out) == os.path.join(out, "run-acvg")
+        os.makedirs(os.path.join(out, "run-acvc"))                       # a helper wrote here first
+        open(os.path.join(out, "run-acvc", "console.log"), "w").write("stray")
+        assert run_dir("acvc", out) == legacy                           # the eMMC decides
+        assert migrate_legacy_run(out) and not migrate_legacy_run(out)
+        new = os.path.join(out, "run-acvc")
+        assert run_dir("acvc", out) == new and os.path.exists(os.path.join(new, "emmc.qcow2"))
+        assert open(os.path.join(new, "console.log")).read() == "old"
+        if not WIN:
+            assert os.path.islink(legacy) and os.path.samefile(legacy, new)
+    # screens: a PPM round trip, then one synthetic screen per first-run state
+    with tempfile.TemporaryDirectory() as d:
+        path = os.path.join(d, "s.ppm")
+        with open(path, "wb") as f:
+            f.write(b"P6\n2 1\n255\n" + bytes([1, 2, 3, 4, 5, 6]))
+        assert read_ppm(path) == (2, 1, bytes([1, 2, 3, 4, 5, 6]))
+
+    def screen(fill, **at):
+        p = {pt: fill for pt in SCREEN_PROBES}
+        p.update({tuple(map(int, k[1:].split("_"))): v for k, v in at.items()})
+        return classify_screen(p)
+    red, pink, olive = (210, 15, 68), (245, 36, 93), (168, 176, 66)
+    assert screen(red, p440_610=pink, p780_670=pink) == ("wizard", "NEXT")
+    assert screen((217, 224, 128), p1110_610=olive, p1110_670=olive, p440_610=(217, 224, 128)) == ("wizard", "GOT IT")
+    assert screen(red) == ("wizard", None)
+    assert screen(BLACK, p5_5=GREY, p1274_5=GREY, p20_770=GREY, p200_770=GREY) == ("select", "NEW PROJECT")
+    assert screen((3, 3, 3), p440_770=GREY, p625_770=GREY, p660_770=BLACK) == ("dialog", "OK")
+    assert screen((3, 3, 3), p440_770=GREY, p625_770=GREY, p660_770=GREY, p830_770=GREY) == ("dialog", "REMIND ME LATER")
+    assert screen((36, 36, 40), p5_5=GREY, p1274_5=GREY, p640_770=(250, 250, 250)) == ("app", None)
+    assert screen((25, 25, 28)) == ("wait", None)                    # boot splash, a fade
 
 
 def main():
@@ -849,11 +1123,15 @@ def main():
     ar.add_argument("--device-label", action="store_true",
                     help=f"label the card '{DEVICE_LABEL}' like the device does (mounted with a space in the path)")
     ar.add_argument("--results", action="store_true", help="show script runner lines, card files and script logs")
-    for n in ("panel", "stop", "reset", "status", "selftest"):
+    fr = sub.add_parser("firstrun", help="tap through the welcome wizard, NEW PROJECT and the info dialogs while they show")
+    fr.add_argument("--timeout", type=int, default=300, help="seconds (default 300, enough for a fresh boot)")
+    for n in ("panel", "stop", "status", "selftest"):
         sub.add_parser(n)
+    rs = sub.add_parser("reset", help="clean eMMC (/data, /factory) at next start; --nvme also wipes the internal NVMe")
+    rs.add_argument("--nvme", action="store_true", help="also delete out/run/nvme.qcow2 (user projects on /nvme, /synths)")
     a = ap.parse_args()
     {"build": cmd_build, "run": cmd_run, "panel": cmd_panel, "ssh": cmd_ssh, "preload": cmd_preload, "autorun": cmd_autorun,
-     "stop": cmd_stop, "reset": cmd_reset, "status": cmd_status, "selftest": lambda _: selftest()}[a.cmd](a)
+     "stop": cmd_stop, "reset": cmd_reset, "firstrun": cmd_firstrun, "status": cmd_status, "selftest": lambda _: selftest()}[a.cmd](a)
 
 
 if __name__ == "__main__":

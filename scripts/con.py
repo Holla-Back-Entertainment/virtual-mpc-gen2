@@ -4,7 +4,7 @@
     con.py [--wait SECONDS] 'command'
 
 The console (TCP port lab.PORTS["console"]) is a root shell via lab autologin. The command is
-sent over the socket; output is read back from out/run/console.log between markers.
+sent over the socket; output is read back from out/run-<MODEL>/console.log between markers.
 Use it when ssh is not available; prefer `python3 lab.py ssh` otherwise.
 """
 import argparse
@@ -15,9 +15,7 @@ import sys
 import uuid
 
 sys.path.insert(0, os.path.join(os.path.dirname(os.path.abspath(__file__)), ".."))
-from lab import HOST, PORTS  # noqa: E402
-
-RUN = os.path.join(os.path.dirname(__file__), "..", "out", "run")
+from lab import HOST, PORTS, RUN  # noqa: E402   (both follow MODEL)
 
 
 def main():

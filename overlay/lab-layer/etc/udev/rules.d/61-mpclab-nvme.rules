@@ -1,0 +1,14 @@
+# Lab only. The XL / Live III internal NVMe is found by its platform path: stock nvme.mount
+# and the generated synths.mount mount /dev/disk/by-path/platform-a40000000.pcie-pci-0000:01:00.0-nvme-1-part{2,1},
+# stock 65-nvme.rules pulls those mounts in by ID_PATH, and the app names the same ID_PATH.
+# QEMU's NVMe (serial "mpclab-nvme") sits on another PCIe path, so it gets the device's
+# ID_PATH and by-path names here: after 60-persistent-storage (which sets ID_PATH from the
+# real path), before 65-nvme.rules (which reads it). The QEMU by-path names stay as well.
+SUBSYSTEM!="block", GOTO="mpclab_nvme_end"
+KERNEL!="nvme*", GOTO="mpclab_nvme_end"
+ATTRS{serial}!="mpclab-nvme*", GOTO="mpclab_nvme_end"
+ENV{ID_PATH}="platform-a40000000.pcie-pci-0000:01:00.0-nvme-1"
+ENV{ID_PATH_TAG}="platform-a40000000_pcie-pci-0000_01_00_0-nvme-1"
+ENV{DEVTYPE}=="disk", SYMLINK+="disk/by-path/platform-a40000000.pcie-pci-0000:01:00.0-nvme-1"
+ENV{DEVTYPE}=="partition", SYMLINK+="disk/by-path/platform-a40000000.pcie-pci-0000:01:00.0-nvme-1-part%n"
+LABEL="mpclab_nvme_end"

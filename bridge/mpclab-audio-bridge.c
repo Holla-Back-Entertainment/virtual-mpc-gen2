@@ -36,7 +36,11 @@
 #include <sys/mman.h>
 #include <unistd.h>
 
-#define CHUNK 128          // frames per transfer on the loopback pairs (the app's period)
+#define CHUNK 128          // the app's period on the loopback pairs
+// frames per transfer on the loopback pairs (both threads wake once per XFER, via avail_min):
+// two app periods halve the wake-ups that run all the time the app's streams do, page or not
+// (see README-GEN2.md, Audio, for the measured CPU)
+#define XFER 256
 #ifndef HOST_CHUNK
 #define HOST_CHUNK 256     // frames per write to the host (5.8 ms): halves virtio kicks
 #endif
@@ -149,6 +153,7 @@ static int open_loop_end(snd_pcm_stream_t dir, snd_pcm_t **pcm, unsigned *ch, sn
         (err = snd_pcm_sw_params_current(*pcm, sw)) < 0 ||
         // playback starts only once the prefill is queued; capture on the first read
         (err = snd_pcm_sw_params_set_start_threshold(*pcm, sw, dir == SND_PCM_STREAM_PLAYBACK ? FEED_PREFILL : 1)) < 0 ||
+        (err = snd_pcm_sw_params_set_avail_min(*pcm, sw, XFER)) < 0 ||
         (err = snd_pcm_sw_params(*pcm, sw)) < 0) {
         snd_pcm_close(*pcm);
         *pcm = NULL;
@@ -186,8 +191,8 @@ static int pcm_port(void) {   // opened lazily; the port exists only when QEMU w
 static void *reader(void *arg) {
     (void)arg;
     make_rt("reader");
-    static char raw[CHUNK * MAXCH * 4];
-    float lp[CHUNK * 2];
+    static char raw[XFER * MAXCH * 4];
+    float lp[XFER * 2];
     int16_t host[HOST_CHUNK * 2];
     unsigned hn = 0;
     for (;;) {
@@ -205,13 +210,14 @@ static void *reader(void *arg) {
         atomic_store(&out_ch, ch);
         fprintf(stderr, "bridge: app output %u ch %s %u Hz\n", ch, snd_pcm_format_name(fmt), rate);
         for (;;) {
-            snd_pcm_sframes_t n = snd_pcm_readi(cap, raw, CHUNK);
+            snd_pcm_sframes_t n = snd_pcm_readi(cap, raw, XFER);
             if (n == -EPIPE) { snd_pcm_prepare(cap); continue; }
             if (n < 0) { say("loop capture", (int)n); break; }
             struct routing r = routing_get();
             unsigned pair = r.pair + 1 < ch ? r.pair : 0;
+            float pk[MAXCH] = {0};                        // local peaks: one atomic per channel per transfer
             for (snd_pcm_sframes_t i = 0; i < n; i++) {
-                for (unsigned c = 0; c < ch; c++) peak_max(&out_peak[c], fabsf(get(raw, i * ch + c, w)));
+                for (unsigned c = 0; c < ch; c++) { float v = fabsf(get(raw, i * ch + c, w)); if (v > pk[c]) pk[c] = v; }
                 host[hn * 2] = r.out ? s16(get(raw, i * ch + pair, w)) : 0;
                 host[hn * 2 + 1] = r.out ? s16(get(raw, i * ch + pair + 1, w)) : 0;
                 lp[i * 2] = get(raw, i * ch, w);          // loop cable carries main out L/R
@@ -222,6 +228,7 @@ static void *reader(void *arg) {
                     hn = 0;
                 }
             }
+            for (unsigned c = 0; c < ch; c++) if (pk[c] > 0) peak_max(&out_peak[c], pk[c]);
             ring_push(&loop_ring, lp, (unsigned)n);
         }
         snd_pcm_close(cap);
@@ -257,8 +264,8 @@ static void *host_in(void *arg) {
 static void *feeder(void *arg) {
     (void)arg;
     make_rt("feeder");
-    static char raw[CHUNK * MAXCH * 4];
-    float lr[CHUNK * 2];
+    static char raw[XFER * MAXCH * 4];
+    float lr[XFER * 2];
     double phase = 0;
     for (;;) {
         while (!running(LOOP_STATUS("c"))) usleep(200000);
@@ -273,12 +280,12 @@ static void *feeder(void *arg) {
         // prefill: the stream starts with FEED_PREFILL frames queued, so a late wake-up of
         // this thread never leaves the app's input without data
         memset(raw, 0, sizeof raw);
-        for (int i = 0; i < FEED_PREFILL / CHUNK; i++) snd_pcm_writei(feed, raw, CHUNK);
+        for (int i = 0; i < FEED_PREFILL / XFER; i++) snd_pcm_writei(feed, raw, XFER);
         int host_primed = 0;
         for (;;) {
             struct routing r = routing_get();
             unsigned got = 0;
-            if (r.in == IN_LOOP) got = ring_pop(&loop_ring, lr, CHUNK);
+            if (r.in == IN_LOOP) got = ring_pop(&loop_ring, lr, XFER);
             else ring_skip(&loop_ring, 0);                // keep the loop ring fresh for later
             if (r.in == IN_HOST) {
                 // the browser's clock drifts against the guest's: keep about HOST_IN_TARGET
@@ -286,25 +293,27 @@ static void *feeder(void *arg) {
                 unsigned fill = ring_fill(&host_ring);
                 if (fill > 4 * HOST_IN_TARGET) ring_skip(&host_ring, HOST_IN_TARGET);
                 if (!host_primed && fill >= HOST_IN_TARGET) host_primed = 1;
-                if (host_primed && (got = ring_pop(&host_ring, lr, CHUNK)) < CHUNK) host_primed = 0;
+                if (host_primed && (got = ring_pop(&host_ring, lr, XFER)) < XFER) host_primed = 0;
             } else ring_skip(&host_ring, 0);
-            memset(raw, 0, (size_t)CHUNK * ch * w);
-            for (unsigned i = 0; i < CHUNK; i++) {
+            // channels 2.. stay zero from the prefill memset; only 1-2 are written below
+            float ipk[2] = {0, 0};
+            for (unsigned i = 0; i < XFER; i++) {
                 for (unsigned c = 0; c < 2 && c < ch; c++) {
                     float v = r.in == IN_TONE ? 0.5f * (float)sin(phase) : i < got ? lr[i * 2 + c] : 0;
                     v *= (float)r.gain;
                     put(raw, i * ch + c, w, v);
-                    peak_max(&in_peak[c], fabsf(v));
+                    if (fabsf(v) > ipk[c]) ipk[c] = fabsf(v);
                 }
                 phase += 2 * M_PI * r.tone_hz / rate;
                 if (phase > 2 * M_PI) phase -= 2 * M_PI;
             }
-            snd_pcm_sframes_t wr = snd_pcm_writei(feed, raw, CHUNK);   // paced by the aloop clock
+            for (unsigned c = 0; c < 2; c++) if (ipk[c] > 0) peak_max(&in_peak[c], ipk[c]);
+            snd_pcm_sframes_t wr = snd_pcm_writei(feed, raw, XFER);   // paced by the aloop clock
             if (wr == -EPIPE) {
                 atomic_fetch_add(&unders, 1);
                 snd_pcm_prepare(feed);
                 memset(raw, 0, sizeof raw);
-                for (int i = 0; i < FEED_PREFILL / CHUNK; i++) snd_pcm_writei(feed, raw, CHUNK);
+                for (int i = 0; i < FEED_PREFILL / XFER; i++) snd_pcm_writei(feed, raw, XFER);
             } else if (wr < 0) { say("loop playback", (int)wr); break; }   // app closed its input
         }
         snd_pcm_close(feed);
