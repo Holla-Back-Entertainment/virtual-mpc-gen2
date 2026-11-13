@@ -1,0 +1,44 @@
+#!/bin/sh
+# Lab only: the MPC XL's rear MIDI ports, MIDI In 1-2 and MIDI Out A-D.
+# The stock XL has no serial MIDI for them: they are USB MIDI behind its internal hub. Here a
+# configfs f_midi gadget on the third dummy UDC (kernel option dummy_hcd.num=3) stands in:
+# in_ports=2 (to the app: In 1, In 2), out_ports=4 (from the app: Out A-D; needs kernel patches
+# 0005, 0006). dummy_hcd loops it back, snd-usb-audio makes it an ordinary USB MIDI card ("MPC XL Rear",
+# ports "MPC XL Rear MIDI 1".."4"), then the relay carries each port to the host on its own
+# virtio-serial port. Not on the Live III (its rear MIDI is different; not modelled).
+set -eu
+CODE=$(tr -d '\0' < /sys/firmware/devicetree/base/inmusic,product-code 2>/dev/null || true)
+[ "$CODE" = ACVG ] && { echo "MPC Live III: no rear MIDI gadget"; exec sleep infinity; }
+G=/sys/kernel/config/usb_gadget/mpclab_rear
+ID=XLRearMIDI
+UDC=dummy_udc.2
+[ -e /sys/class/udc/$UDC ] || { echo "no $UDC: boot with dummy_hcd.num=3" >&2; exit 1; }
+
+# Come after the app's own gadget ("standalone"), as the surface does: the app picks its
+# forwarding card by the f_midi driver name "MIDI Gadget", which this gadget's card shares.
+i=0
+while [ "$(cat /sys/kernel/config/usb_gadget/standalone/UDC 2>/dev/null)" = "" ] && [ $i -lt 120 ]; do
+    sleep 0.5; i=$((i + 1))
+done
+
+if [ ! -d $G ]; then
+    mkdir $G
+    # Linux Foundation multifunction gadget: a generic USB MIDI device, not an inMusic product
+    echo 0x1d6b > $G/idVendor
+    echo 0x0104 > $G/idProduct
+    echo 0x0100 > $G/bcdDevice
+    mkdir $G/strings/0x409
+    echo "MPC Lab" > $G/strings/0x409/manufacturer
+    echo "MPC XL Rear" > $G/strings/0x409/product
+    echo "MPCLAB-REAR-0001" > $G/strings/0x409/serialnumber
+    mkdir $G/configs/c.1 $G/functions/midi.rear
+    echo 2 > $G/functions/midi.rear/in_ports
+    echo 4 > $G/functions/midi.rear/out_ports
+    echo $ID > $G/functions/midi.rear/id
+    # no sequencer client for the gadget's own end (kernel patch 0006): the app would list its
+    # ports f_midi-2 and f_midi-3 as MIDI inputs (it hides only the names f_midi-0 and f_midi-1)
+    echo 1 > $G/functions/midi.rear/no_seq
+    ln -s $G/functions/midi.rear $G/configs/c.1/
+fi
+[ "$(cat $G/UDC)" = "$UDC" ] || echo $UDC > $G/UDC
+exec /opt/mpclab/bin/mpclab-midi-relay $ID

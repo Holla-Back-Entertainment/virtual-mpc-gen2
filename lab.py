@@ -55,7 +55,10 @@ HOST = "127.0.0.1"
 # so an XL and a Live III run side by side from one copy. A second copy of the lab (an agent's
 # working copy) moves all of them with MPCLAB_PORT_OFFSET; space copies 20 apart (offset 10 = the
 # other model's ports).
-BASE_PORTS = {"cs": 5651, "ext_midi": 5652, "console": 5653, "qmp": 5654, "qmp_panel": 5655, "audio": 5656, "pcm": 5657, "vnc": 6010, "ssh": 2122, "usb_ssh": 2322, "panel": 8865}
+BASE_PORTS = {"cs": 5651, "ext_midi": 5652, "console": 5653, "qmp": 5654, "qmp_panel": 5655, "audio": 5656, "pcm": 5657, "vnc": 6010, "ssh": 2122, "usb_ssh": 2322, "panel": 8865,
+              # the XL's rear MIDI In 1-2 / Out A-D (USB MIDI gadget, mpclab-midi-relay), raw MIDI bytes each
+              "midi_in1": 5751, "midi_in2": 5752, "midi_outa": 5753, "midi_outb": 5754, "midi_outc": 5755, "midi_outd": 5756}
+REAR_MIDI = ("midi_in1", "midi_in2", "midi_outa", "midi_outb", "midi_outc", "midi_outd")
 MODEL_PORT_STEP = 10
 
 
@@ -523,9 +526,10 @@ def cmd_run(a):
     # this halved the clicks for ~15 ms more pad latency. `--extra snd_aloop.min_buffer=0`
     # gives the device's buffer back (the later option wins). Kernel patch 0003.
     BUFFER = "snd_aloop.min_buffer=2048"
-    # two dummy UDCs: dummy_udc.0 for the app's own gadget, dummy_udc.1 for the virtual
-    # control surface (overlay mpclab-cs-gadget), each looped back to the VM's own USB host
-    UDCS = "dummy_hcd.num=2"
+    # three dummy UDCs: dummy_udc.0 for the app's own gadget, dummy_udc.1 for the virtual
+    # control surface (overlay mpclab-cs-gadget), dummy_udc.2 for the XL's rear MIDI ports
+    # (mpclab-midi-gadget), each looped back to the VM's own USB host
+    UDCS = "dummy_hcd.num=3"
     # Stock command line from the signed FIT (extracted at build time), eMMC = first virtio disk.
     # tty1 stays empty under the boot splash: no cursor, no stock getty login prompt there
     # nohz=off: tickless idle made HVF wake idle vCPUs 15-30 ms late for every disk read
@@ -571,6 +575,8 @@ def cmd_run(a):
            # host sound: the bridge streams PCM here and the panel page's audio worker plays it,
            # connected straight to this WebSocket (no QEMU audio device, no relay in between)
            "-chardev", tcp("pcm", PORTS["pcm"], ",nodelay=on,websocket=on"), "-device", "virtserialport,chardev=pcm,name=mpclab.pcm",
+           # the XL's rear MIDI In 1-2 / Out A-D, one virtio-serial port + TCP port each (mpclab-midi-relay)
+           *[a for k in REAR_MIDI for a in ("-chardev", tcp(k, PORTS[k], ",nodelay=on"), "-device", f"virtserialport,chardev={k},name=mpclab.{k}")],
            "-vnc", f"{HOST}:{PORTS['vnc'] - 5900}",      # the panel page's screen
            # ssh: the lab's own sshd (port 22 of the lab network). usb_ssh: the device's USB
            # network address 192.168.155.1, port 2222, where community root-SSH autoruns listen
@@ -1061,6 +1067,7 @@ def selftest_models():
     assert xl == BASE_PORTS and xl["panel"] == 8865 and xl["qmp"] == 5654 and xl["vnc"] == 6010 and xl["ssh"] == 2122
     assert all(l3[k] == xl[k] + 10 for k in xl) and l3["panel"] == 8875
     assert model_ports("acvg", 40)["panel"] == 8915 and model_ports("acvc", 40)["qmp"] == 5694
+    assert [xl[k] for k in REAR_MIDI] == list(range(5751, 5757)) and l3["midi_in1"] == 5761
     assert not set(xl.values()) & set(l3.values()) and len(set(xl.values())) == len(xl)
     assert PORTS == model_ports(MODEL) and RUN == run_dir(MODEL)
     # run directories, and the move of a pre-split out/run (one XL) to out/run-acvc

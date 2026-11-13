@@ -12,3 +12,4 @@ sdcard/
 .DS_Store
 .idea/
 /ext/
+mac/build/

@@ -24,6 +24,7 @@ install -D -m 600 "$OUT/keys/id_ed25519.pub" "$STAGE/root/.ssh/authorized_keys"
 mkdir -p "$STAGE/lab"
 install -D -m 755 "$OUT/bridge/mpclab-audio-bridge" "$STAGE/opt/mpclab/bin/mpclab-audio-bridge"
 install -D -m 755 "$OUT/bridge/mpclab-cs-relay" "$STAGE/opt/mpclab/bin/mpclab-cs-relay"
+install -D -m 755 "$OUT/bridge/mpclab-midi-relay" "$STAGE/opt/mpclab/bin/mpclab-midi-relay"
 chmod 700 "$STAGE/root/.ssh"
 # Gen 2: this rootfs ships no acvc/acvg gadget scheme, so there is nothing to adapt here.
 chown -R 0:0 "$STAGE"

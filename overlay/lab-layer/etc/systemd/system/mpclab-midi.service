@@ -1,0 +1,12 @@
+# Lab only: the MPC XL's rear MIDI In 1-2 / Out A-D (USB MIDI gadget + relay, one host TCP port each).
+[Unit]
+Description=MPC lab rear MIDI ports
+After=acvs.service mpclab-cs.service
+
+[Service]
+ExecStart=/opt/mpclab/bin/mpclab-midi-gadget
+Restart=always
+RestartSec=2
+
+[Install]
+WantedBy=multi-user.target

@@ -1,0 +1,19 @@
+f_midi: give the gadget's rawmidi the right number of substreams each way (lab only).
+
+snd_rawmidi_new() takes (output_count, input_count). f_midi's rawmidi OUTPUT is USB IN (to the
+host), served by the in_ports jacks, and its INPUT is USB OUT, served by out_ports; but it
+passes (out_ports, in_ports). Equal counts hide it. The lab's rear-MIDI gadget (in_ports=2:
+MIDI In 1-2 reach the app; out_ports=4: the app's MIDI Out A-D) needs 4 input substreams, so
+without this Out C and D (cables 2, 3) had no substream and were dropped.
+
+--- a/drivers/usb/gadget/function/f_midi.c
++++ b/drivers/usb/gadget/function/f_midi.c
+@@ -826,7 +826,7 @@
+ 	/* Set up rawmidi */
+ 	snd_component_add(card, "MIDI");
+ 	err = snd_rawmidi_new(card, card->longname, 0,
+-			      midi->out_ports, midi->in_ports, &rmidi);
++			      midi->in_ports, midi->out_ports, &rmidi);
+ 	if (err < 0) {
+ 		ERROR(midi, "snd_rawmidi_new() failed: error %d\n", err);
+ 		goto fail;

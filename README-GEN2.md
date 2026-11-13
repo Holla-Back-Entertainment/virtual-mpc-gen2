@@ -60,7 +60,9 @@ puts the XL's page on 8905 and the Live III's on 8915.
 | usb_ssh | 2322 | 2332 | the device's USB network address 192.168.155.1:2222 |
 | qmp / qmp_panel | 5654 / 5655 | 5664 / 5665 | QEMU monitor (lab.py / panel server) |
 | cs | 5651 | 5661 | virtual USB control surface (guest relay <-> panel) |
-| ext_midi | 5652 | 5662 | rear MIDI port (raw MIDI bytes) |
+| ext_midi | 5652 | 5662 | "External MIDI" serial port (raw MIDI bytes; a Gen 1 leftover, kept) |
+| midi_in1 / midi_in2 | 5751 / 5752 | 5761 / 5762 | XL MIDI In 1, 2: host -> app (raw MIDI bytes) |
+| midi_outa .. midi_outd | 5753 .. 5756 | 5763 .. 5766 | XL MIDI Out A-D: app -> host (raw MIDI bytes) |
 | console | 5653 | 5663 | guest console (also `out/run-<model>/console.log`) |
 | audio / pcm | 5656 / 5657 | 5666 / 5667 | audio bridge / PCM WebSocket for the page |
 | vnc | 6010 | 6020 | the screen |
@@ -130,9 +132,23 @@ The app opens the lab's snd-aloop card as 32 ch S32_LE 44.1 kHz (it asks for 56)
 virtio-serial port `mpclab.pcm` (WebSocket on the `pcm` port; the page plays it, **Sound** button)
 and feeds app inputs 1-2 from the source picked with the page's **In** button or the API:
 
-    GET  /audio   {"in", "gain", "tone_hz", "bridge": linked, "levels": {"out": [peak per app
-                  output channel], "in": [l, r], "drop", "under"}, "levels_age": s}
-    POST /audio   {"in": "off"|"tone"|"mic", "gain": 0..100, "tone_hz": Hz}   (any subset)
+    GET  /audio   {"in", "gain", "tone_hz", "width", "in_width", "bridge": linked, "levels": {"out":
+                  [peak per app output channel], "in": [inputs 1-4], "drop", "under"}, "levels_age": s}
+    POST /audio   {"in": "off"|"tone"|"mic", "gain": 0..100, "tone_hz": Hz,
+                   "width": 2|8, "in_width": 2|4}   (any subset)
+
+**Multichannel** (for a native client; the page keeps the defaults). The `pcm` WebSocket carries
+S16LE 44.1 kHz interleaved. `width` 2 (default) = main out 1-2, exactly as before; `width` 8 = app
+playback channels 1-8 = **Out 1-8** (Main = 1,2), ~705 KB/s. `in_width` 2 (default) = the host
+stream feeds Input 1,2; `in_width` 4 = it feeds **Input 1,2 and 3,4** (capture channels 1-4), gain
+on all four; `tone` stays on 1-2. Every write to the host is one whole 256-frame chunk of one width,
+and a width change drops the partial chunk, so a client counting frames from the stream's first
+byte stays aligned across a change (an in_width change drops the partial input frame; the client
+should switch on a frame boundary). Measured 14 Nov 2026 (XL): with pad 1 routed to Out 3,4 in the
+mixer's I/O tab, width=8 put 0.78 on channels 3,4 and 0 elsewhere, also when switched 2 -> 8
+mid-stream; 706 KB/s and `drop` +0 over 12 s with a client reading; width=2 176 KB/s, +0. A tone
+sent on host channels 3-4 with in_width=4 gives `levels.in` [0, 0, 0.25, 0.25] and lights the XL's
+`AUDIO_IN_3_4_LEFT/RIGHT` meters (4 segments): capture 3-4 is Input 3,4.
 
 `tone` is a sine from the bridge (0.5 x gain/100, so -12 dBFS at the default 50); `mic` is the
 page's microphone (the browser asks; the page streams it back over the same WebSocket, and only
@@ -149,13 +165,35 @@ while the page's sound is on). One client at a time can hold the `pcm` WebSocket
   the NVMe existed keeps `temporaryFileLocation` = `/sdcard/...`, an empty read-only directory,
   and the Sampler then says DISK SPACE LOW: run `lab.py reset` once (it keeps the NVMe).
 - **Meter LEDs** move with signal on the XL: `VU_LEFT/RIGHT` and `MAIN_OUTPUT_LEFT/RIGHT` (0-5
-  segments on pad hits), `AUDIO_IN_1/2` (4 segments at -12 dB). `AUDIO_IN_3_4_*` and `USB_IN_*`
-  stay 0 (nothing feeds them). Live III: no meter CCs at all during playback.
+  segments on pad hits), `AUDIO_IN_1/2` (4 segments at -12 dB). `AUDIO_IN_3_4_*` move with
+  `in_width` 4 (above); `USB_IN_*` stay 0 (nothing feeds them). Live III: no meter CCs at all during playback.
 - **Live III**: main out is app channels 1-2 as on the XL; the Sampler lists Input 1,2 then USB
   Input 1,2 ... (no separate built-in mic entry).
 - **CPU** (guest, schedstat, 10 s): bridge 1.5% of one CPU with no page connected, 3.5-7% while a
   client is connected and the tone or metronome runs; the app 12-19%. The bridge moves 256 frames
   per wake-up (avail_min), about 170 wake-ups/s per thread.
+
+## Rear MIDI ports (XL)
+
+The stock XL has no serial MIDI for its DIN ports; they are USB MIDI behind its internal hub.
+The lab plays them with a second f_midi gadget (`mpclab-midi-gadget`, 1d6b:0104 "MPC XL Rear",
+in_ports=2, out_ports=4) on a third dummy UDC (`dummy_hcd.num=3`); snd-usb-audio gives the app an
+ordinary USB MIDI card. `mpclab-midi-relay` joins each gadget port to its own virtio-serial port
+and TCP port (`midi_in1`.. above), raw MIDI bytes, no framing. Kernel patch 0005 fixes f_midi's
+swapped substream counts (with 2 in / 4 out, Out C and D were dropped). Not on the Live III (its
+`midi_*` QEMU ports exist but nothing in the VM uses them). The Mac app makes CoreMIDI
+destinations "Virtual MPC XL MIDI In 1", "... In 2" and sources "Virtual MPC XL MIDI Out A".."Out D";
+"Virtual MPC XL" (both ways) stays External MIDI.
+
+In the app (MIDI IN / MIDI OUT lists) the ports read **MPC XL Rear MIDI 1, 2** (inputs = In 1, 2)
+and **MPC XL Rear MIDI 1..4** (outputs = Out A..D); f_midi gives its jacks no names, so the
+letters do not show. The gadget's own end has no sequencer client (`no_seq`, kernel patch 0006),
+otherwise the app listed its ports `f_midi-2`, `f_midi-3` as inputs. snd-usb-audio claims the
+device, so `az01-unsupp-dev` logs "skipping supported device" and no UNRECOGNIZED USB DEVICE
+dialog appears. Verified 14 Nov 2026 (XL, Mac app): notes sent to In 1 play pad 1 (levels.out 0.78)
+with the drum track's MIDI IN on All Ports, on Rear MIDI 1 (In 2 then gives 0) and on Rear MIDI 2
+(In 1 then gives 0); a MIDI track with MIDI OUT Rear MIDI 1..4 echoed In 1's notes to Out A..D
+only (5 of 5 note-ons, 0 on the other three each time). External MIDI still works both ways.
 
 ## What does not work
 

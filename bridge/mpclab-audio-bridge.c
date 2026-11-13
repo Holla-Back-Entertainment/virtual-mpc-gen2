@@ -7,9 +7,14 @@
 //   app playback hw:Loopback,0,0 -> reader thread (hw:Loopback,1,0 capture)  -> levels, host
 //   app capture  hw:Loopback,0,0 <- feeder thread (hw:Loopback,1,0 playback) <- source
 //
-// Host audio goes over the virtio-serial port "mpclab.pcm" (a TCP port on the host) as raw
-// S16LE stereo 44.1 kHz in both directions; the panel server relays it to the browser, which
-// plays it (and records the microphone for AUDIO IN). No QEMU audio device is used: virtio-snd
+// Host audio goes over the virtio-serial port "mpclab.pcm" (a QEMU WebSocket on the host) as raw
+// S16LE 44.1 kHz interleaved in both directions; the browser page (or the Mac client) plays it
+// (and sends the microphone for AUDIO IN).
+//   to the host:   width=2 (default) the selected pair; width=8 app outputs 1-8 (Out 1-8, Main = 1,2)
+//   from the host: in_width=2 (default) feeds app inputs 1,2; in_width=4 feeds inputs 1-4 (Input 1,2 + 3,4)
+// Every write to the host is one whole HOST_CHUNK of one width (1 KiB stereo, 4 KiB 8 ch), so a
+// width change never tears a frame: the partial chunk of the old width is dropped. A change of
+// in_width drops the partial host frame carried over (the client switches on a frame boundary). No QEMU audio device is used: virtio-snd
 // returned EIO under load and its blocking writes stalled the guest (measured: 3-6x more app
 // stream restarts with it than without).
 //
@@ -18,8 +23,8 @@
 // nothing on the host side may block it: all host I/O is non-blocking behind ring buffers.
 //
 // The panel talks to the bridge over "mpclab.audio": it sends
-//   "routing out=on pair=0 in=tone gain=50 tone_hz=440"
-// and the bridge answers "levels out <peak per channel...> in <l> <r> drop <n> under <n>" ~10x/s.
+//   "routing out=on pair=0 in=tone gain=50 tone_hz=440 width=2 in_width=2"
+// and the bridge answers "levels out <peak per channel...> in <1> <2> <3> <4> drop <n> under <n>" ~10x/s.
 // Lab only. Built against the device's alsa-lib (libasound.so.2).
 #include <alsa/asoundlib.h>
 #include <errno.h>
@@ -48,6 +53,8 @@
 #define FEED_PREFILL 256
 #define HOST_IN_TARGET 512 // frames kept queued from the host microphone (absorbs network jitter)
 #define MAXCH 32
+#define HOST_OUT_MAX 8     // widest stream to the host (app outputs 1-8)
+#define IN_MAX 4           // widest stream from the host (app inputs 1-4)
 #define RT_PRIO 15         // below the app's audio threads (SCHED_RR 20)
 #define LINK "/dev/virtio-ports/mpclab.audio"
 #define PCM "/dev/virtio-ports/mpclab.pcm"
@@ -61,8 +68,10 @@ struct routing {
     int in;               // IN_*
     double gain;          // REC GAIN 0..1, applied to the input source
     double tone_hz;
+    unsigned width;       // channels to the host: 2 (the pair) or 8 (outputs 1-8)
+    unsigned in_width;    // channels from the host: 2 (inputs 1,2) or 4 (inputs 1-4)
 };
-static struct routing R = {1, 0, IN_SILENCE, 0.5, 440};
+static struct routing R = {1, 0, IN_SILENCE, 0.5, 440, 2, 2};
 static pthread_mutex_t r_lock = PTHREAD_MUTEX_INITIALIZER;
 
 static struct routing routing_get(void) {
@@ -72,26 +81,21 @@ static struct routing routing_get(void) {
     return r;
 }
 
-// single-producer/single-consumer ring of stereo float frames
-struct ring { float buf[16384 * 2]; atomic_uint w, r; };
+// single-producer/single-consumer ring of IN_MAX-channel float frames (the loop cable uses 1-2)
+struct ring { float buf[16384 * IN_MAX]; atomic_uint w, r; };
 static struct ring loop_ring, host_ring;   // reader -> feeder (loop cable), host mic -> feeder
-#define RING_CAP (sizeof loop_ring.buf / sizeof loop_ring.buf[0] / 2)
+#define RING_CAP (sizeof loop_ring.buf / sizeof loop_ring.buf[0] / IN_MAX)
 
-static void ring_push(struct ring *q, const float *lr, unsigned n) {
+static void ring_push(struct ring *q, const float *fr, unsigned n) {
     unsigned w = atomic_load(&q->w);
-    for (unsigned i = 0; i < n && w - atomic_load(&q->r) < RING_CAP; i++, w++) {   // full: drop new frames
-        q->buf[(w % RING_CAP) * 2] = lr[i * 2];
-        q->buf[(w % RING_CAP) * 2 + 1] = lr[i * 2 + 1];
-    }
+    for (unsigned i = 0; i < n && w - atomic_load(&q->r) < RING_CAP; i++, w++)   // full: drop new frames
+        memcpy(&q->buf[(w % RING_CAP) * IN_MAX], &fr[i * IN_MAX], IN_MAX * sizeof(float));
     atomic_store(&q->w, w);   // only the producer writes w, only the consumer writes r
 }
 
-static unsigned ring_pop(struct ring *q, float *lr, unsigned n) {   // returns frames copied
+static unsigned ring_pop(struct ring *q, float *fr, unsigned n) {   // returns frames copied
     unsigned w = atomic_load(&q->w), r = atomic_load(&q->r), k = 0;
-    for (; k < n && r != w; k++, r++) {
-        lr[k * 2] = q->buf[(r % RING_CAP) * 2];
-        lr[k * 2 + 1] = q->buf[(r % RING_CAP) * 2 + 1];
-    }
+    for (; k < n && r != w; k++, r++) memcpy(&fr[k * IN_MAX], &q->buf[(r % RING_CAP) * IN_MAX], IN_MAX * sizeof(float));
     atomic_store(&q->r, r);
     return k;
 }
@@ -103,7 +107,7 @@ static void ring_skip(struct ring *q, unsigned keep) {   // consumer side: drop 
 }
 
 // levels: peaks since the last report, kept as float bits so threads update them atomically
-static atomic_uint out_peak[MAXCH], in_peak[2];
+static atomic_uint out_peak[MAXCH], in_peak[IN_MAX];
 static atomic_uint out_ch, drops, unders;
 static void peak_max(atomic_uint *p, float v) {
     union { float f; unsigned u; } cur, nv = { .f = v };
@@ -192,9 +196,9 @@ static void *reader(void *arg) {
     (void)arg;
     make_rt("reader");
     static char raw[XFER * MAXCH * 4];
-    float lp[XFER * 2];
-    int16_t host[HOST_CHUNK * 2];
-    unsigned hn = 0;
+    float lp[XFER * IN_MAX] = {0};               // loop cable frames (channels 3-4 stay 0)
+    int16_t host[HOST_CHUNK * HOST_OUT_MAX];
+    unsigned hn = 0, hw = 2;                     // frames queued for the host, at width hw
     for (;;) {
         while (!running(LOOP_STATUS("p"))) usleep(200000);
         snd_pcm_t *cap;
@@ -215,16 +219,21 @@ static void *reader(void *arg) {
             if (n < 0) { say("loop capture", (int)n); break; }
             struct routing r = routing_get();
             unsigned pair = r.pair + 1 < ch ? r.pair : 0;
+            if (r.width != hw) { hw = r.width; hn = 0; }  // width change: drop the partial chunk, never mix widths
             float pk[MAXCH] = {0};                        // local peaks: one atomic per channel per transfer
             for (snd_pcm_sframes_t i = 0; i < n; i++) {
                 for (unsigned c = 0; c < ch; c++) { float v = fabsf(get(raw, i * ch + c, w)); if (v > pk[c]) pk[c] = v; }
-                host[hn * 2] = r.out ? s16(get(raw, i * ch + pair, w)) : 0;
-                host[hn * 2 + 1] = r.out ? s16(get(raw, i * ch + pair + 1, w)) : 0;
-                lp[i * 2] = get(raw, i * ch, w);          // loop cable carries main out L/R
-                lp[i * 2 + 1] = get(raw, i * ch + 1, w);
+                int16_t *h = &host[hn * hw];
+                if (hw == 2) {
+                    h[0] = r.out ? s16(get(raw, i * ch + pair, w)) : 0;
+                    h[1] = r.out ? s16(get(raw, i * ch + pair + 1, w)) : 0;
+                } else for (unsigned c = 0; c < hw; c++) h[c] = r.out && c < ch ? s16(get(raw, i * ch + c, w)) : 0;
+                lp[i * IN_MAX] = get(raw, i * ch, w);     // loop cable carries main out L/R
+                lp[i * IN_MAX + 1] = get(raw, i * ch + 1, w);
                 if (++hn == HOST_CHUNK) {                 // never blocks: a full port drops the chunk
                     int fd = pcm_port();
-                    if (fd >= 0 && write(fd, host, sizeof host) != (ssize_t)sizeof host) atomic_fetch_add(&drops, 1);
+                    size_t bytes = (size_t)HOST_CHUNK * hw * sizeof host[0];
+                    if (fd >= 0 && write(fd, host, bytes) != (ssize_t)bytes) atomic_fetch_add(&drops, 1);
                     hn = 0;
                 }
             }
@@ -240,22 +249,26 @@ static void *reader(void *arg) {
 // ------------------------------------------------------------------ host input (microphone)
 static void *host_in(void *arg) {
     (void)arg;
-    static int16_t buf[1024 * 2];
-    static float lr[1024 * 2];
+    static int16_t buf[1024 * IN_MAX];
+    static float fr[1024 * IN_MAX];
     size_t have = 0;   // bytes of a partial frame carried over
+    unsigned iw = 2;   // channels per host frame
     for (;;) {
         int fd = pcm_port();
         if (fd < 0) { sleep(2); continue; }
         struct pollfd p = { fd, POLLIN, 0 };
         if (poll(&p, 1, 1000) <= 0) continue;
+        unsigned nw = routing_get().in_width;
+        if (nw != iw) { iw = nw; have = 0; }   // in_width change: drop the partial frame, realign
         ssize_t k = read(fd, (char *)buf + have, sizeof buf - have);
         // 0: no page connected (POLLHUP never clears); sleep, or this thread spins a whole CPU
         if (k <= 0) { if (k == 0 || errno != EAGAIN) usleep(100000); continue; }
-        size_t bytes = have + (size_t)k, frames = bytes / 4;
-        for (size_t i = 0; i < frames * 2; i++) lr[i] = buf[i] / 32768.0f;
-        ring_push(&host_ring, lr, (unsigned)frames);
-        have = bytes - frames * 4;
-        memmove(buf, (char *)buf + frames * 4, have);
+        size_t fb = iw * sizeof buf[0], bytes = have + (size_t)k, frames = bytes / fb;
+        for (size_t i = 0; i < frames; i++)
+            for (unsigned c = 0; c < IN_MAX; c++) fr[i * IN_MAX + c] = c < iw ? buf[i * iw + c] / 32768.0f : 0;
+        ring_push(&host_ring, fr, (unsigned)frames);
+        have = bytes - frames * fb;
+        memmove(buf, (char *)buf + frames * fb, have);
     }
     return NULL;
 }
@@ -265,7 +278,7 @@ static void *feeder(void *arg) {
     (void)arg;
     make_rt("feeder");
     static char raw[XFER * MAXCH * 4];
-    float lr[XFER * 2];
+    float fr[XFER * IN_MAX];
     double phase = 0;
     for (;;) {
         while (!running(LOOP_STATUS("c"))) usleep(200000);
@@ -285,7 +298,7 @@ static void *feeder(void *arg) {
         for (;;) {
             struct routing r = routing_get();
             unsigned got = 0;
-            if (r.in == IN_LOOP) got = ring_pop(&loop_ring, lr, XFER);
+            if (r.in == IN_LOOP) got = ring_pop(&loop_ring, fr, XFER);
             else ring_skip(&loop_ring, 0);                // keep the loop ring fresh for later
             if (r.in == IN_HOST) {
                 // the browser's clock drifts against the guest's: keep about HOST_IN_TARGET
@@ -293,13 +306,14 @@ static void *feeder(void *arg) {
                 unsigned fill = ring_fill(&host_ring);
                 if (fill > 4 * HOST_IN_TARGET) ring_skip(&host_ring, HOST_IN_TARGET);
                 if (!host_primed && fill >= HOST_IN_TARGET) host_primed = 1;
-                if (host_primed && (got = ring_pop(&host_ring, lr, XFER)) < XFER) host_primed = 0;
+                if (host_primed && (got = ring_pop(&host_ring, fr, XFER)) < XFER) host_primed = 0;
             } else ring_skip(&host_ring, 0);
-            // channels 2.. stay zero from the prefill memset; only 1-2 are written below
-            float ipk[2] = {0, 0};
+            // channels 5.. stay zero from the prefill memset; only 1-4 are written below
+            // (tone and loop fill 1-2; host fills 1-2, or 1-4 with in_width=4)
+            float ipk[IN_MAX] = {0};
             for (unsigned i = 0; i < XFER; i++) {
-                for (unsigned c = 0; c < 2 && c < ch; c++) {
-                    float v = r.in == IN_TONE ? 0.5f * (float)sin(phase) : i < got ? lr[i * 2 + c] : 0;
+                for (unsigned c = 0; c < IN_MAX && c < ch; c++) {
+                    float v = r.in == IN_TONE ? (c < 2 ? 0.5f * (float)sin(phase) : 0) : i < got ? fr[i * IN_MAX + c] : 0;
                     v *= (float)r.gain;
                     put(raw, i * ch + c, w, v);
                     if (fabsf(v) > ipk[c]) ipk[c] = fabsf(v);
@@ -307,7 +321,7 @@ static void *feeder(void *arg) {
                 phase += 2 * M_PI * r.tone_hz / rate;
                 if (phase > 2 * M_PI) phase -= 2 * M_PI;
             }
-            for (unsigned c = 0; c < 2; c++) if (ipk[c] > 0) peak_max(&in_peak[c], ipk[c]);
+            for (unsigned c = 0; c < IN_MAX; c++) if (ipk[c] > 0) peak_max(&in_peak[c], ipk[c]);
             snd_pcm_sframes_t wr = snd_pcm_writei(feed, raw, XFER);   // paced by the aloop clock
             if (wr == -EPIPE) {
                 atomic_fetch_add(&unders, 1);
@@ -349,11 +363,14 @@ static void link_poll(void) {
             else if (!strcmp(tok, "in")) r.in = !strcmp(v, "tone") ? IN_TONE : !strcmp(v, "loop") ? IN_LOOP : !strcmp(v, "host") ? IN_HOST : IN_SILENCE;
             else if (!strcmp(tok, "gain")) r.gain = atof(v) / 100.0;
             else if (!strcmp(tok, "tone_hz")) r.tone_hz = atof(v);
+            else if (!strcmp(tok, "width")) r.width = atoi(v) == 8 ? 8 : 2;
+            else if (!strcmp(tok, "in_width")) r.in_width = atoi(v) == 4 ? 4 : 2;
         }
         pthread_mutex_lock(&r_lock);
         R = r;
         pthread_mutex_unlock(&r_lock);
-        fprintf(stderr, "bridge: routing out=%d pair=%u in=%d gain=%.2f tone=%.0f Hz\n", r.out, r.pair, r.in, r.gain, r.tone_hz);
+        fprintf(stderr, "bridge: routing out=%d pair=%u in=%d gain=%.2f tone=%.0f Hz width=%u in_width=%u\n",
+                r.out, r.pair, r.in, r.gain, r.tone_hz, r.width, r.in_width);
     }
 }
 
@@ -377,8 +394,9 @@ int main(void) {
         unsigned ch = atomic_load(&out_ch);
         int k = snprintf(msg, sizeof msg, "levels out");
         for (unsigned c = 0; c < ch && c < MAXCH; c++) k += snprintf(msg + k, sizeof msg - k, " %.4f", peak_take(&out_peak[c]));
-        snprintf(msg + k, sizeof msg - k, " in %.4f %.4f drop %u under %u\n", peak_take(&in_peak[0]), peak_take(&in_peak[1]),
-                 atomic_load(&drops), atomic_load(&unders));
+        k += snprintf(msg + k, sizeof msg - k, " in");
+        for (unsigned c = 0; c < IN_MAX; c++) k += snprintf(msg + k, sizeof msg - k, " %.4f", peak_take(&in_peak[c]));
+        snprintf(msg + k, sizeof msg - k, " drop %u under %u\n", atomic_load(&drops), atomic_load(&unders));
         if (ch) link_send(msg);
     }
 }
