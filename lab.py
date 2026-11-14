@@ -586,7 +586,9 @@ def cmd_run(a):
            "-vnc", f"{HOST}:{PORTS['vnc'] - 5900}",      # the panel page's screen
            # ssh: the lab's own sshd (port 22 of the lab network). usb_ssh: the device's USB
            # network address 192.168.155.1, port 2222, where community root-SSH autoruns listen
-           "-netdev", f"user,id=net0,hostfwd=tcp:{HOST}:{PORTS['ssh']}-:22,"
+           # restrict=on: no outbound internet, so the app's Sentry crash reporter can't phone
+           # inMusic from an emulator. hostfwd (inbound) still works.
+           "-netdev", f"user,id=net0,restrict=on,hostfwd=tcp:{HOST}:{PORTS['ssh']}-:22,"
                       f"hostfwd=tcp:{HOST}:{PORTS['usb_ssh']}-192.168.155.1:2222",
            "-device", "virtio-net-pci,netdev=net0",
            "-qmp", f"tcp:{HOST}:{PORTS['qmp']},server=on,wait=off",
