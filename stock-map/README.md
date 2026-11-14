@@ -2,7 +2,7 @@
 
 A map of every stock MPC Sample 1.3.0.12 screen, in English, Russian and Chinese: which button or
 SHIFT combination opens what, what SCREEN 1-3 and K1-K3 do there, how to leave it, and what
-the function is for (a summary of the [Akai user guide](https://www.akaipro.com/guides/mpc-sample/)).
+the function is for (a summary of the [Akai user guide](https://www.akaipro.com/mpc-sample/)).
 56 sections, 383 screenshots taken in this lab from the stock app, no mod running.
 
 ## Open it

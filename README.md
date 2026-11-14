@@ -79,6 +79,8 @@ More: `python3 lab.py ssh` gives a root shell on the unit, `lab.py preload LIB.s
 own library into the app, `lab.py reset` starts fresh (`--nvme` also wipes internal storage).
 Full reference, ports and limits: [README-GEN2.md](README-GEN2.md). How the control surface
 talks to the app: [research/gen2-control-surface/FINDINGS.md](research/gen2-control-surface/FINDINGS.md).
+Keyboard maps: [panel/XL-KEYS.md](panel/XL-KEYS.md), [panel/LIVE3-KEYS.md](panel/LIVE3-KEYS.md).
+Live III control list: [panel/LIVE3-CONTROLS.md](panel/LIVE3-CONTROLS.md). Mac app: [mac/README.md](mac/README.md).
 
 ## Testers
 
