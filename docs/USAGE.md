@@ -200,4 +200,4 @@ QMP 5554/5555, audio bridge 5556, sound 5557, VNC 5910 (the page's screen), lab 
 `/lab` in the VM) exists on macOS/Linux only; nothing depends on it.
 
 Host tools in `scripts/`: `cs.py` (raw bytes on the panel UART), `probe_cs.py` (scan control
-ids), `qmp.py screendump x.png`, `con.py 'cmd'` (run a command on the console).
+ids), `qmp.py screendump x.png`, `console.py 'cmd'` (run a command on the console).
