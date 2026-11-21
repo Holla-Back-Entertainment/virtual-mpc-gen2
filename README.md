@@ -46,8 +46,9 @@ Checked on both units, 13 Nov 2026.
 
 You need:
 
-- A Mac with Apple Silicon. That is what this was built and tested on. Linux and Windows
-  may work (the Sample lab it grew from runs there) but are untested here.
+- A Mac with Apple Silicon. That is what this was built and tested on. Linux may work (the
+  Sample lab it grew from runs there) but is untested here. **Windows** has its own front end
+  and setup: [windows/README.md](windows/README.md) (new; not yet booted on a Windows PC).
 - Python 3.9+, QEMU 9+ (`qemu-system-aarch64`, `qemu-img`), OpenSSH, Docker (build step only).
 - The MPC Gen 2 3.10.1 update image. Get it through the inMusic Software Center or your own
   unit's online update. It is one image for the XL, Live III, One, Key 37 and Force Gen 2.
