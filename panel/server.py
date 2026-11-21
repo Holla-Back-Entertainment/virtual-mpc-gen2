@@ -762,7 +762,7 @@ def make_handler(panel, qmp, midi, rear, sd, vnc, pages, burst, job=None):
             self.close_connection = True
             self.connection.setsockopt(socket.IPPROTO_TCP, socket.TCP_NODELAY, 1)
             ws = Ws(self.connection, self.rfile)
-            with open(CONTROLS) as f:
+            with open(CONTROLS, encoding="utf-8") as f:
                 controls = json.load(f)
 
             def push():
@@ -856,7 +856,7 @@ def make_handler(panel, qmp, midi, rear, sd, vnc, pages, burst, job=None):
             req = json.loads(self.rfile.read(n) or b"{}")
             try:
                 if self.path == "/control":
-                    with open(CONTROLS) as f:
+                    with open(CONTROLS, encoding="utf-8") as f:
                         controls = json.load(f)
                     data = frames_for(controls, req["name"], req["action"], req.get("value"))
                 elif self.path == "/send":
@@ -951,11 +951,11 @@ def selftest():
     assert r.levels()["out"][:2] == [0.5, 0.25] and r.buf == b"lev"
     # every control drawn on the page must have frames in controls.json
     import re
-    with open(os.path.join(HERE, "index.html")) as f:
+    with open(os.path.join(HERE, "index.html"), encoding="utf-8") as f:
         page = f.read()
     names = set(re.findall(r'B\("([^"]+)"', page)) | {f"PAD {i}" for i in range(1, 17)} | \
         {"K1", "K2", "K3", "FADER", "DATA", "MAIN VOLUME"}
-    with open(CONTROLS) as f:
+    with open(CONTROLS, encoding="utf-8") as f:
         mapped = json.load(f)["controls"]
     missing = sorted(n for n in names if not any(k in mapped.get(n, {}) for k in ("press", "set", "turn")))
     assert not missing, f"controls without frames: {missing}"

@@ -510,7 +510,7 @@ def cmd_run(a):
     os.makedirs(SHARE, exist_ok=True)
     qemu, qimg = tool("qemu-system-aarch64"), tool("qemu-img")
     accel = accel_choice(a.accel)
-    cpu = "host" if accel in ("hvf", "kvm") else "cortex-a55"
+    cpu = "host" if accel in ("hvf", "kvm", "whpx") else "cortex-a55"
     machine = ["-M", "virt", "-accel", accel if accel != "tcg" else "tcg,thread=multi", "-cpu", cpu, "-smp", "4", "-m", os.environ.get("MPCLAB_MEM", "4G")]
     # ponytail: 2G had no headroom (app idles at ~860 MB, no swap); a guest out of RAM livelocks
 
@@ -538,6 +538,8 @@ def cmd_run(a):
     # (cold project load 42-46 s -> 23 s); costs ~15% of one host core while idle.
     with open(os.path.join(OUT, "fw", "cmdline.txt")) as f:
         args = f.read().strip().replace("/dev/mmcblk0p", "/dev/vda") + " console=hvc0 vt.global_cursor_default=0 systemd.mask=getty@tty1.service nohz=off " + BUFFER + " " + UDCS + " " + a.extra
+    if WIN:   # no 9p share on Windows (below): mask its mount, or it is a failed unit at every boot
+        args += " systemd.mask=lab.mount"
 
     emmc = os.path.join(RUN, "emmc.qcow2")
     base = os.path.join(OUT, "emmc.base.qcow2")
@@ -649,8 +651,21 @@ def ssh_base():
         # Windows OpenSSH refuses keys readable by others; keep a private copy in the profile.
         dst = os.path.join(os.path.expanduser("~"), ".ssh", "mpclab_ed25519")
         os.makedirs(os.path.dirname(dst), exist_ok=True)
-        shutil.copyfile(key, dst)
-        subprocess.run(["icacls", dst, "/inheritance:r", "/grant:r", f"{os.environ.get('USERNAME', '')}:R"], capture_output=True)
+        with open(key, "rb") as f:
+            want = f.read()
+        try:
+            with open(dst, "rb") as f:
+                have = f.read()
+        except OSError:
+            have = None
+        if have != want:
+            # the copy is read-only for its owner (below), so it cannot be overwritten: remove it
+            # first (the profile's .ssh folder lets its owner delete it), then write it afresh
+            if have is not None:
+                os.remove(dst)
+            with open(dst, "wb") as f:
+                f.write(want)
+            subprocess.run(["icacls", dst, "/inheritance:r", "/grant:r", f"{os.environ.get('USERNAME', '')}:R"], capture_output=True)
         key = dst
     return ["-i", key, "-p", str(PORTS["ssh"]), "-o", "StrictHostKeyChecking=no",
             "-o", "UserKnownHostsFile=" + ("NUL" if WIN else "/dev/null"), "-o", "LogLevel=ERROR", "-o", "ConnectTimeout=10"]
@@ -695,6 +710,31 @@ def cmd_preload(a):
                 f"(tail -n 3 /run/mpc-lab-ui-test/overlay.log 2>/dev/null; true)"))
 
 
+def device_modes(info):
+    """tarfile filter: root-owned, 0755 folders and 0644 files, as content sits on a unit."""
+    info.uid = info.gid = 0
+    info.uname = info.gname = "root"
+    info.mode = 0o755 if info.isdir() else 0o644
+    return info
+
+
+def copy_tree_win(src, remote):
+    """Stream `src` as a tar archive into `remote` (an ssh command running tar -x); returns its exit code."""
+    import tarfile
+    proc = subprocess.Popen(remote, stdin=subprocess.PIPE)
+    try:
+        with tarfile.open(fileobj=proc.stdin, mode="w|", format=tarfile.GNU_FORMAT) as t:
+            t.add(src, arcname=".", filter=device_modes)
+    except (BrokenPipeError, OSError):
+        pass                              # ssh ended early; its exit code says why
+    finally:
+        try:
+            proc.stdin.close()
+        except OSError:
+            pass
+    return proc.wait()
+
+
 def cmd_content(a):
     """Copy your own content (a real unit's /synths, or expansions you own) into the running VM."""
     src = os.path.abspath(a.src)
@@ -706,13 +746,19 @@ def cmd_content(a):
         # /synths is the factory partition, mounted read-only like on the device. Keep paths as on a
         # real unit (Demos/, Expansions/, Synths/<vendor - MPC - plugin>/); see README-GEN2.md.
         dst, pre, post = "/synths", "mount -o remount,rw /synths", "sync; mount -o remount,ro /synths"
-    tar = subprocess.Popen(["tar", "-C", src, "-cf", "-", "."], stdout=subprocess.PIPE,
-                           env={**os.environ, "COPYFILE_DISABLE": "1"})   # no macOS ._ files
-    rc = subprocess.run(["ssh", *ssh_base(), "root@" + HOST,
-                         f"{pre} && tar -xf - -C '{dst}'; r=$?; {post}; exit $r"], stdin=tar.stdout).returncode
-    tar.stdout.close()
-    if tar.wait() != 0 or rc != 0:
-        die(f"copy into {dst} failed (tar {tar.returncode}, ssh {rc})")
+    remote = ["ssh", *ssh_base(), "root@" + HOST, f"{pre} && tar -xf - -C '{dst}'; r=$?; {post}; exit $r"]
+    if WIN:
+        # Windows' tar.exe would carry Windows modes (0666/0777) and owners into /synths; Python's
+        # tarfile writes the device's usual root-owned 0755/0644 instead
+        rc, tar_rc = copy_tree_win(src, remote), 0
+    else:
+        tar = subprocess.Popen(["tar", "-C", src, "-cf", "-", "."], stdout=subprocess.PIPE,
+                               env={**os.environ, "COPYFILE_DISABLE": "1"})   # no macOS ._ files
+        rc = subprocess.run(remote, stdin=tar.stdout).returncode
+        tar.stdout.close()
+        tar_rc = tar.wait()
+    if tar_rc != 0 or rc != 0:
+        die(f"copy into {dst} failed (tar {tar_rc}, ssh {rc})")
     print(f"copied {src} -> {dst}; restart the app to rescan: python3 lab.py ssh systemctl restart {APP_UNIT}")
 
 
@@ -1085,6 +1131,20 @@ def selftest():
             raise AssertionError("zip with ../ accepted")
         except ValueError:
             pass
+    # content copy as on Windows: a tar stream into a command's stdin, device modes and owners
+    import tarfile
+    with tempfile.TemporaryDirectory() as d:
+        src, got = os.path.join(d, "Synths", "Vendor - MPC - Plug"), os.path.join(d, "got.tar")
+        os.makedirs(src)
+        with open(os.path.join(src, "Kick é.wav"), "wb") as f:
+            f.write(b"RIFF")
+        sink = [sys.executable, "-c", "import shutil, sys; shutil.copyfileobj(sys.stdin.buffer, open(sys.argv[1], 'wb'))", got]
+        assert copy_tree_win(os.path.join(d, "Synths"), sink) == 0
+        with tarfile.open(got) as t:
+            m = {i.name: i for i in t.getmembers()}
+        f = m["./Vendor - MPC - Plug/Kick é.wav"]
+        assert f.mode == 0o644 and f.uid == 0 and f.uname == "root" and m["./Vendor - MPC - Plug"].mode == 0o755
+        assert copy_tree_win(os.path.join(d, "Synths"), [sys.executable, "-c", "import sys; sys.exit(3)"]) == 3
     selftest_models()
     print("lab selftest ok")
 
@@ -1146,7 +1206,7 @@ def main():
     b.add_argument("steps", nargs="*", help="any of: kernel bridge tools images content (default: kernel bridge images content)")
     r = sub.add_parser("run")
     r.add_argument("--headless", action="store_true")
-    r.add_argument("--accel", default="auto", help="hvf, kvm, tcg (default: auto)")
+    r.add_argument("--accel", default="auto", help="hvf, kvm, tcg, whpx (untested: Windows on ARM) (default: auto)")
     r.add_argument("--extra", default="", help="extra kernel arguments")
     r.add_argument("--no-panel", action="store_true", help="do not start the panel server")
     s_ = sub.add_parser("ssh"); s_.add_argument("command", nargs=argparse.REMAINDER)
