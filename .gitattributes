@@ -6,3 +6,9 @@ Dockerfile text eol=lf
 *.patch text eol=lf
 initramfs/init text eol=lf
 overlay/** text eol=lf
+# Read or compiled inside the container or the VM too: kernel/lab.config with CRLF fails
+# merge_config.sh's check ("MISSING: CONFIG_..."), so keep these LF as well.
+kernel/*.config text eol=lf
+*.c text eol=lf
+*.h text eol=lf
+inputs.sha256 text eol=lf
