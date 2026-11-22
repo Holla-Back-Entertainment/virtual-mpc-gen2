@@ -18,6 +18,21 @@ mkdir -p "$OUT/keys"
 # --- lab layer ----------------------------------------------------------------
 STAGE=/tmp/layer
 rm -rf "$STAGE"; cp -a /lab/overlay/lab-layer "$STAGE"
+# A Windows checkout loses two things git stores. Its symlinks (the .wants entries) arrive as
+# small files holding the target path, and systemd ignores a .wants entry that is not a
+# symlink, so none of the lab's services would start. And Docker Desktop shows Windows files
+# as 0777, which would make the guest's / and /etc world-writable (sshd then refuses the key).
+# Put both back as git has them; on a macOS/Linux checkout this changes nothing.
+find "$STAGE" -path '*.wants/*' -type f | while read -r f; do
+    t=$(cat "$f")
+    case "$t" in
+        /*.service|/*.mount|/*.target|/*.socket|/*.timer|/*.path) ln -sfn "$t" "$f" ;;
+        *) echo "build-images: $f is a plain file, not a symlink to a unit" >&2; exit 1 ;;
+    esac
+done
+find "$STAGE" -type d -exec chmod 755 {} +
+find "$STAGE" -type f -exec chmod 644 {} +
+chmod 755 "$STAGE"/opt/mpclab/bin/*
 # -D: git keeps no empty directories, so a fresh clone has no root/.ssh or lab/ (mount point)
 install -D -m 600 "$OUT/keys/host_ed25519" "$STAGE/etc/ssh/mpclab_host_ed25519_key"
 install -D -m 600 "$OUT/keys/id_ed25519.pub" "$STAGE/root/.ssh/authorized_keys"

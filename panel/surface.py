@@ -61,7 +61,7 @@ PROFILES = {"acvc": {"name": "MPC XL", "product": 0x5A, "serial": b"MPCLAB-ACVC-
 def profile(model):
     """Protocol constants + control tables for one product ("acvc" or "acvg")."""
     p = dict(PROFILES[model], model=model)
-    with open(os.path.join(os.path.dirname(os.path.abspath(__file__)), model + ".json")) as f:
+    with open(os.path.join(os.path.dirname(os.path.abspath(__file__)), model + ".json"), encoding="utf-8") as f:
         m = json.load(f)
     buttons = {k: v for k, v in m["buttons_ch1_note"].items() if k not in p.get("blocked", ())}
     p.update(buttons=buttons, pads=m["pads_ch10_note"], leds=m["leds_ch_cc"])

@@ -1,7 +1,7 @@
 #!/usr/bin/env python3
 """Run a shell command on the VM's virtio console and print its output.
 
-    con.py [--wait SECONDS] 'command'
+    console.py [--wait SECONDS] 'command'
 
 The console (TCP port lab.PORTS["console"]) is a root shell via lab autologin. The command is
 sent over the socket; output is read back from out/run-<MODEL>/console.log between markers.

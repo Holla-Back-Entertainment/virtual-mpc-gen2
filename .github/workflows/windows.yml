@@ -1,0 +1,77 @@
+# The Windows host side of the lab, on a real Windows machine: checkout, self-tests, the SSH key
+# copy, QEMU for Windows taking lab.py's whole VM command line (stand-in images, no firmware) and
+# WinMM. Booting MPC itself needs your own firmware, so that part is not here.
+name: windows
+
+on:
+  push:
+  pull_request:
+  workflow_dispatch:
+
+jobs:
+  windows:
+    runs-on: windows-latest
+    timeout-minutes: 30
+    defaults:
+      run:
+        shell: bash          # Git Bash: -e, so every command of a step counts
+    steps:
+      - uses: actions/checkout@v4
+
+      - uses: actions/setup-python@v5
+        with:
+          python-version: "3.12"
+
+      - name: Checkout as Windows has it (line endings, symlinks)
+        run: |
+          python -c "
+          import glob, os, subprocess
+          print('core.autocrlf =', subprocess.run(['git', 'config', 'core.autocrlf'], capture_output=True, text=True).stdout.strip() or '(unset)')
+          lf = ['kernel/lab.config', 'initramfs/init', 'docker/Dockerfile', 'inputs.sha256', *glob.glob('scripts/*.sh'),
+                *glob.glob('bridge/*.c'), *[p for p in glob.glob('overlay/**', recursive=True) if os.path.isfile(p)]]
+          bad = [p for p in lf if b'\r' in open(p, 'rb').read()]
+          assert not bad, f'CRLF in files the container or VM reads: {bad}'
+          links = glob.glob('overlay/lab-layer/etc/systemd/system/*.wants/*')
+          print(f'{len(lf)} LF files ok; {len(links)} .wants entries, symlinks: {sum(map(os.path.islink, links))} (build-images.sh restores them)')
+          "
+
+      - name: Self-tests
+        env:
+          PYTHONUTF8: "1"
+        run: |
+          python lab.py selftest
+          python panel/gen2.py --selftest
+          python panel/server.py --selftest
+          python windows/midi_bridge.py --selftest
+
+      - name: SSH key copy (read-only copy, run twice, then a new key)
+        run: |
+          python -c "
+          import os, lab
+          k = os.path.join(lab.OUT, 'keys', 'id_ed25519')
+          os.makedirs(os.path.dirname(k), exist_ok=True)
+          open(k, 'w').write('one')
+          lab.ssh_base(); lab.ssh_base()
+          open(k, 'w').write('two')
+          lab.ssh_base()
+          assert open(os.path.expanduser('~/.ssh/mpclab_ed25519')).read() == 'two'
+          print('ssh key copy ok')
+          "
+          rm -rf out
+
+      - name: Install QEMU for Windows
+        run: |
+          choco install qemu -y --no-progress
+          "/c/Program Files/qemu/qemu-system-aarch64.exe" --version
+
+      - name: vmpc setup (Python, QEMU version and devices, OpenSSH)
+        run: |
+          python windows/vmpc.py setup
+
+      - name: QEMU takes the lab's VM command line (MPC XL)
+        run: python windows/smoke_qemu.py --model acvc
+
+      - name: QEMU takes the lab's VM command line (MPC Live III)
+        run: |
+          rm -rf out sdcard
+          python windows/smoke_qemu.py --model acvg

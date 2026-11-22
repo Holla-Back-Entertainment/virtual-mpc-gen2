@@ -274,7 +274,7 @@ confirmed on a real XL or Live III.
 - **SSH:** ticking Developer Panel starts sshd with root login and no key or password
   (`/usr/lib/az0x/user-access/enable.sh`). Through the lab: `ssh -p 2142 root@127.0.0.1`
   (XL) or `-p 2152` (Live III), plus your port offset. Unticking stops sshd and leaves
-  `/data/ssh`. It also takes `lab.py ssh` down; use `scripts/con.py` then.
+  `/data/ssh`. It also takes `lab.py ssh` down; use `scripts/console.py` then.
 - **autorun.sh:** a drive with `autorun.sh` at its root asks "contains an autorun script. Do
   you want to run it now?". YES runs it as root through `systemd-run` (unit `autorun-sh`),
   with `AZ0X_SCRIPT_SRCDIR` set to the drive.
