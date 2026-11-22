@@ -84,7 +84,7 @@ def image_in_use(path, qimg="qemu-img"):
     """True when a running QEMU holds `path` (qcow2 write lock), so its directory must not move."""
     if not os.path.exists(path) or not shutil.which(qimg):
         return False
-    r = subprocess.run([qimg, "info", path], capture_output=True, text=True)
+    r = subprocess.run([qimg, "info", path], capture_output=True, text=True, errors="replace")
     return r.returncode != 0 and "lock" in r.stderr
 
 
@@ -466,7 +466,7 @@ def sdcard_image(qimg=None):
     os.makedirs(os.path.dirname(SD_IMG), exist_ok=True)
     spec = json.dumps({"driver": "vvfat", "dir": SDCARD, "fat-type": 16, "label": MODELS[MODEL]["card"]})
     tmp = SD_IMG + ".new"
-    r = subprocess.run([qimg or tool("qemu-img"), "convert", "-q", "-O", "raw", "json:" + spec, tmp], capture_output=True, text=True)
+    r = subprocess.run([qimg or tool("qemu-img"), "convert", "-q", "-O", "raw", "json:" + spec, tmp], capture_output=True, text=True, errors="replace")
     if r.returncode:
         raise RuntimeError("sdcard/ does not fit on a 500 MB FAT16 card" if "fit" in r.stderr else r.stderr.strip())
     os.truncate(tmp, SD_SIZE)

@@ -79,10 +79,10 @@ def check(env):
     if not qemu:
         out.append(("qemu", False, "qemu-system-aarch64 not found (PATH or Program Files\\qemu)"))
     else:
-        r = subprocess.run([qemu, "--version"], capture_output=True, text=True)
+        r = subprocess.run([qemu, "--version"], capture_output=True, text=True, errors="replace")
         m = re.search(r"version (\d+)\.(\d+)", r.stdout)
         ver = (int(m.group(1)), int(m.group(2))) if m else (0, 0)
-        devs = subprocess.run([qemu, "-device", "help"], capture_output=True, text=True).stdout
+        devs = subprocess.run([qemu, "-device", "help"], capture_output=True, text=True, errors="replace").stdout
         lacking = [d for d in QEMU_DEVICES if f'"{d}"' not in devs]
         ok = ver >= (9, 0) and not lacking and which("qemu-img", env)
         detail = f"QEMU {ver[0]}.{ver[1]} ({qemu})"
@@ -98,7 +98,7 @@ def check(env):
     if not docker:
         out.append(("docker", False, "docker not found (needed for `vmpc build` only)"))
     else:
-        r = subprocess.run([docker, "info", "--format", "{{.OSType}} {{.ServerVersion}}"], capture_output=True, text=True)
+        r = subprocess.run([docker, "info", "--format", "{{.OSType}} {{.ServerVersion}}"], capture_output=True, text=True, errors="replace")
         os_type = r.stdout.split()[0] if r.returncode == 0 and r.stdout.strip() else ""
         out.append(("docker", os_type == "linux",
                     f"Docker {r.stdout.split()[1]} ({os_type} containers)" if os_type else
