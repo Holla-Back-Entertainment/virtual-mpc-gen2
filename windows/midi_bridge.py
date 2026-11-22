@@ -440,11 +440,17 @@ def selftest():
         ins, outs = mm.inputs(), mm.outputs()
         print(f"WinMM: {len(ins)} inputs {ins}, {len(outs)} outputs {outs}")
         if outs:
-            dev = WinMMOut(mm, 0)
-            for msg in (bytes([0x90, 60, 1]), bytes([0x80, 60, 0]), bytes([0xF0, 0x7E, 0x7F, 0x09, 0x01, 0xF7])):
-                dev.send(msg)                     # a quiet note and a GM reset (SysEx: midiOutLongMsg)
-            dev.close()
-            print(f"WinMM: sent a note and a SysEx to {outs[0]!r}")
+            try:
+                dev = WinMMOut(mm, 0)
+            except OSError as e:
+                # the GS Wavetable Synth needs an audio device: on a machine without one (CI)
+                # it refuses to open with MMSYSERR_ERROR (1)
+                print(f"WinMM: {outs[0]!r} did not open ({e}); output path not exercised")
+            else:
+                for msg in (bytes([0x90, 60, 1]), bytes([0x80, 60, 0]), bytes([0xF0, 0x7E, 0x7F, 0x09, 0x01, 0xF7])):
+                    dev.send(msg)                 # a quiet note and a GM reset (SysEx: midiOutLongMsg)
+                dev.close()
+                print(f"WinMM: sent a note and a SysEx to {outs[0]!r}")
     print("midi_bridge selftest ok")
 
 
